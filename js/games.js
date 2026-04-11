@@ -1261,8 +1261,10 @@ function initComboMenu() {
         if (tabId === 'my-sticker') {
             renderMyStickerLibrary();
         } else if (tabId === 'partner-sticker') {
+            // 每次进入对方表情页时，重置分组筛选为“全部”
+            window._partnerStickerGroup = '__all__';
             renderPartnerStickerLibrary();
-        } else {
+        } else if (tabId === 'poke') {
             renderUserPokeMenu();
         }
     }
@@ -1318,33 +1320,161 @@ function initComboMenu() {
     }
 
     function renderPartnerStickerLibrary() {
-        contentArea.innerHTML = '';
-        if (!stickerLibrary || stickerLibrary.length === 0) {
-            contentArea.innerHTML = `
-                <div class="empty-sticker-tip">
-                    <i class="far fa-images"></i>
-                    对方表情库还是空的哦<br>
-                    请去"高级功能"->"自定义回复"->"表情库"中添加图片~
-                </div>
-            `;
+        if (!contentArea) return;
+
+        // 如果分组数据尚未加载，延迟重试（最多重试5次，每次间隔200ms）
+        if ((!window.customStickerGroups || window.customStickerGroups.length === 0) && !window._stickerGroupsLoaded) {
+            if (typeof window._stickerGroupsRetryCount === 'undefined') window._stickerGroupsRetryCount = 0;
+            if (window._stickerGroupsRetryCount < 5) {
+                window._stickerGroupsRetryCount++;
+                setTimeout(() => renderPartnerStickerLibrary(), 200);
+            } else {
+                window._stickerGroupsRetryCount = 0;
+                // 如果重试后仍无数据，继续渲染（无分组栏）
+            }
             return;
         }
+
+        // 重置重试计数
+        window._stickerGroupsRetryCount = 0;
+
+        // 当前选中的分组，默认全部
+        if (typeof window._partnerStickerGroup === 'undefined') {
+            window._partnerStickerGroup = '__all__';
+        }
+        const currentGroup = window._partnerStickerGroup;
+        contentArea.innerHTML = '';
+
+        // 获取分组数据
+        const groups = (window.customStickerGroups && Array.isArray(window.customStickerGroups))
+            ? window.customStickerGroups
+            : [];
+
+        // ----- 分组筛选栏（仅当存在分组时才显示）-----
+        if (groups.length > 0) {
+            const filterBar = document.createElement('div');
+            filterBar.className = 'sticker-group-filter-bar';
+            filterBar.style.cssText = `
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 12px;
+            flex-shrink: 0;
+            scrollbar-width: thin;
+        `;
+
+            // 全部按钮
+            const allBtn = document.createElement('button');
+            allBtn.textContent = '全部';
+            allBtn.className = 'sticker-group-filter-chip';
+            allBtn.style.cssText = `
+            padding: 5px 12px;
+            border-radius: 20px;
+            border: 1.5px solid var(--border-color);
+            background: ${currentGroup === '__all__' ? 'var(--accent-color)' : 'var(--primary-bg)'};
+            color: ${currentGroup === '__all__' ? '#fff' : 'var(--text-primary)'};
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.2s;
+        `;
+            allBtn.onclick = (e) => {
+                e.stopPropagation();
+                window._partnerStickerGroup = '__all__';
+                renderPartnerStickerLibrary();
+            };
+            filterBar.appendChild(allBtn);
+
+            // 各分组按钮
+            groups.forEach(g => {
+                const isActive = currentGroup === g.id;
+                const btn = document.createElement('button');
+                btn.textContent = g.name;
+                btn.className = 'sticker-group-filter-chip';
+                btn.style.cssText = `
+                padding: 5px 12px;
+                border-radius: 20px;
+                border: 1.5px solid ${isActive ? g.color : 'var(--border-color)'};
+                background: ${isActive ? g.color : 'var(--primary-bg)'};
+                color: ${isActive ? '#fff' : 'var(--text-primary)'};
+                font-size: 12px;
+                cursor: pointer;
+                white-space: nowrap;
+                transition: all 0.2s;
+            `;
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    window._partnerStickerGroup = g.id;
+                    renderPartnerStickerLibrary();
+                };
+                filterBar.appendChild(btn);
+            });
+
+            contentArea.appendChild(filterBar);
+        }
+
+        // ----- 过滤贴纸 -----
+        let filteredStickers = [...stickerLibrary];
+        if (currentGroup !== '__all__') {
+            const targetGroup = groups.find(g => g.id === currentGroup);
+            if (targetGroup && Array.isArray(targetGroup.items)) {
+                filteredStickers = filteredStickers.filter(s => targetGroup.items.includes(s));
+            } else {
+                filteredStickers = [];
+            }
+        }
+
+        // 空状态
+        if (filteredStickers.length === 0) {
+            const emptyDiv = document.createElement('div');
+            emptyDiv.style.cssText = `
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        `;
+            emptyDiv.textContent = '暂时没有贴纸，请去「自定义回复」→「表情库」中添加';
+            contentArea.appendChild(emptyDiv);
+            return;
+        }
+
+        // ----- 贴纸网格 -----
         const grid = document.createElement('div');
         grid.className = 'sticker-grid-view';
-        stickerLibrary.forEach(src => {
-            const item = makeStickerItem(src, () => {
-                addMessage({ id: Date.now(), sender: 'user', text: '', timestamp: new Date(), image: src, status: 'sent', type: 'normal' });
+        grid.style.cssText = `
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(70px, auto));
+        gap: 8px;
+        padding: 8px;
+    `;
+
+        filteredStickers.forEach(src => {
+            const item = document.createElement('div');
+            item.className = 'sticker-grid-item';
+            item.innerHTML = `<img src="${src}" loading="lazy">`;
+            item.onclick = (e) => {
+                e.stopPropagation();
+                addMessage({
+                    id: Date.now(),
+                    sender: 'user',
+                    text: '',
+                    timestamp: new Date(),
+                    image: src,
+                    status: 'sent',
+                    type: 'normal'
+                });
                 playSound('send');
                 picker.classList.remove('active');
                 const delayRange = settings.replyDelayMax - settings.replyDelayMin;
                 setTimeout(simulateReply, settings.replyDelayMin + Math.random() * delayRange);
-            });
+            };
             grid.appendChild(item);
         });
-        contentArea.appendChild(grid);
-    }
 
-    function renderStickerLibrary() { renderMyStickerLibrary(); }
+        contentArea.appendChild(grid);
+    }    function renderStickerLibrary() { renderMyStickerLibrary(); }
     function renderUserPokeMenu() {
         contentArea.innerHTML = '';
 

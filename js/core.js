@@ -307,7 +307,9 @@ const loadData = async () => {
             localforage.getItem(getStorageKey('showPartnerNameInChat')),
             localforage.getItem(`${APP_PREFIX}themeSchemes`),
             localforage.getItem(getStorageKey('myStickerLibrary')),
-            localforage.getItem(getStorageKey('customReplyGroups'))
+            localforage.getItem(getStorageKey('customReplyGroups')),
+            localforage.getItem(getStorageKey('customEmojiGroups')),
+            localforage.getItem(getStorageKey('customStickerGroups')),
         ]);
         const getVal = (index) => results[index].status === 'fulfilled' ? results[index].value : null;
 
@@ -330,6 +332,13 @@ const loadData = async () => {
         const savedThemeSchemes = getVal(16);
         const savedMyStickers = getVal(17);
         const savedReplyGroups = getVal(18);
+        const savedEmojiGroups = getVal(19);   // 注意索引要对应上面添加的位置
+        const savedStickerGroups = getVal(20);
+        if (savedEmojiGroups) window.customEmojiGroups = savedEmojiGroups;
+        else if (!window.customEmojiGroups) window.customEmojiGroups = [];
+
+        if (savedStickerGroups) window.customStickerGroups = savedStickerGroups;
+        else if (!window.customStickerGroups) window.customStickerGroups = [];
 
         if (savedPartnerPersonas) partnerPersonas = savedPartnerPersonas;
 
@@ -576,7 +585,9 @@ const saveData = async () => {
         { key: 'myStickerLibrary',       val: () => localforage.setItem(getStorageKey('myStickerLibrary'), myStickerLibrary) },
         { key: 'customThemes',           val: () => localforage.setItem(`${APP_PREFIX}customThemes`, customThemes) },
         { key: 'themeSchemes',           val: () => localforage.setItem(`${APP_PREFIX}themeSchemes`, themeSchemes) },
-        { key: 'chatMessages',           val: () => localforage.setItem(getStorageKey('chatMessages'), messages) },
+        { key: 'chatMessages', val: () => localforage.setItem(getStorageKey('chatMessages'), messages) },
+        { key: 'customEmojiGroups', val: () => localforage.setItem(getStorageKey('customEmojiGroups'), customEmojiGroups) },
+        { key: 'customStickerGroups', val: () => localforage.setItem(getStorageKey('customStickerGroups'), customStickerGroups) },
     ];
 
     const partnerAvatarSrc = (() => {
