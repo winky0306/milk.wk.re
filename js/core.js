@@ -2355,6 +2355,7 @@ function handleSnapshotSelection(messageId) {
 }
 
 // 生成聊天截图
+// 生成聊天截图（支持群聊成员头像和名字）
 async function generateMessagesSnapshot() {
     if (selectedSnapshotMessages.length === 0) {
         showNotification('请至少选择一条消息', 'warning');
@@ -2395,10 +2396,35 @@ async function generateMessagesSnapshot() {
     header.innerHTML = `📸 聊天截图 · ${new Date().toLocaleString()}`;
     container.appendChild(header);
 
+    // 获取群聊相关状态和函数（如果存在）
+    const isGroupMode = window.groupChatEnabled === true;
+    const showGroupName = window.groupChatShowName === true;
+    const getGroupMember = (typeof window.getGroupMemberForMessage === 'function')
+        ? window.getGroupMemberForMessage
+        : null;
+
+    // 辅助函数：获取消息所属的群成员
+    function getMemberForMessage(msg) {
+        if (!isGroupMode || !getGroupMember) return null;
+        try {
+            return getGroupMember(msg.id);
+        } catch (e) {
+            return null;
+        }
+    }
+
     // 渲染选中的消息
-    for (const msg of selectedMsgs) {
+    for (let i = 0; i < selectedMsgs.length; i++) {
+        const msg = selectedMsgs[i];
+        const member = getMemberForMessage(msg);
+
+        // 判断是否显示为发送方（我）还是接收方（对方/群成员）
+        const isUser = (msg.sender === 'user');
+        // 群成员消息统一视为接收方样式
+        const isReceived = !isUser || (member !== null);
+
         const msgWrapper = document.createElement('div');
-        msgWrapper.className = `snapshot-msg-wrapper ${msg.sender === 'user' ? 'sent' : 'received'}`;
+        msgWrapper.className = `snapshot-msg-wrapper ${isUser && !member ? 'sent' : 'received'}`;
         msgWrapper.style.cssText = `
             display: flex;
             margin-bottom: 16px;
@@ -2406,7 +2432,7 @@ async function generateMessagesSnapshot() {
             align-items: flex-start;
         `;
 
-        // 头像
+        // ----- 头像部分 -----
         const avatarDiv = document.createElement('div');
         avatarDiv.className = 'snapshot-avatar';
         avatarDiv.style.cssText = `
@@ -2420,30 +2446,67 @@ async function generateMessagesSnapshot() {
             align-items: center;
             justify-content: center;
         `;
-        const isUser = msg.sender === 'user';
-        const avatarSrc = isUser
-            ? (DOMElements.me.avatar.querySelector('img')?.src || '')
-            : (DOMElements.partner.avatar.querySelector('img')?.src || '');
+
+        let avatarSrc = null;
+        let defaultIcon = '<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>';
+
+        if (member && member.avatar) {
+            avatarSrc = member.avatar;
+        } else if (isUser) {
+            avatarSrc = DOMElements.me.avatar.querySelector('img')?.src || null;
+        } else if (!member) {
+            avatarSrc = DOMElements.partner.avatar.querySelector('img')?.src || null;
+        }
+
         if (avatarSrc) {
             avatarDiv.innerHTML = `<img src="${avatarSrc}" style="width:100%;height:100%;object-fit:cover;">`;
         } else {
-            avatarDiv.innerHTML = `<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>`;
+            avatarDiv.innerHTML = defaultIcon;
         }
 
-        // 气泡内容
+        // ----- 气泡内容 -----
         const bubbleDiv = document.createElement('div');
-        bubbleDiv.className = `snapshot-bubble ${msg.sender === 'user' ? 'snapshot-sent' : 'snapshot-received'}`;
+        bubbleDiv.className = `snapshot-bubble ${isUser && !member ? 'snapshot-sent' : 'snapshot-received'}`;
         bubbleDiv.style.cssText = `
             max-width: 260px;
             padding: 8px 12px;
-            border-radius: ${msg.sender === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px'};
-            background: ${msg.sender === 'user' ? 'var(--message-sent-bg)' : 'var(--message-received-bg)'};
-            color: ${msg.sender === 'user' ? 'var(--message-sent-text)' : 'var(--message-received-text)'};
+            border-radius: ${isUser && !member ? '16px 16px 4px 16px' : '16px 16px 16px 4px'};
+            background: ${isUser && !member ? 'var(--message-sent-bg)' : 'var(--message-received-bg)'};
+            color: ${isUser && !member ? 'var(--message-sent-text)' : 'var(--message-received-text)'};
             font-size: 14px;
             line-height: 1.5;
             word-break: break-word;
         `;
 
+        // 如果群聊模式开启且需要显示成员名字，且该消息属于群成员，则添加名字标签
+        if (isGroupMode && showGroupName && member) {
+            const nameLabel = document.createElement('div');
+            nameLabel.className = 'snapshot-group-name';
+            nameLabel.style.cssText = `
+                font-size: 11px;
+                font-weight: 600;
+                color: var(--accent-color);
+                margin-bottom: 4px;
+                letter-spacing: 0.3px;
+            `;
+            nameLabel.textContent = member.name || '成员';
+            bubbleDiv.appendChild(nameLabel);
+        } else if (!isUser && !member && (settings.showPartnerNameInChat || showPartnerNameInChat)) {
+            // 单人模式显示对方名字（如果开启）
+            const nameLabel = document.createElement('div');
+            nameLabel.className = 'snapshot-group-name';
+            nameLabel.style.cssText = `
+                font-size: 11px;
+                font-weight: 600;
+                color: var(--accent-color);
+                margin-bottom: 4px;
+                letter-spacing: 0.3px;
+            `;
+            nameLabel.textContent = settings.partnerName || '对方';
+            bubbleDiv.appendChild(nameLabel);
+        }
+
+        // 消息内容
         let contentHtml = '';
         if (msg.text) {
             contentHtml += `<div>${msg.text.replace(/\n/g, '<br>')}</div>`;
@@ -2451,7 +2514,7 @@ async function generateMessagesSnapshot() {
         if (msg.image) {
             contentHtml += `<img src="${msg.image}" style="max-width:100%;max-height:150px;border-radius:8px;margin-top:6px;">`;
         }
-        bubbleDiv.innerHTML = contentHtml;
+        bubbleDiv.innerHTML += contentHtml;
 
         // 时间戳
         const timeSpan = document.createElement('div');
@@ -2460,17 +2523,31 @@ async function generateMessagesSnapshot() {
             font-size: 10px;
             color: var(--text-secondary);
             margin-top: 4px;
-            text-align: ${msg.sender === 'user' ? 'right' : 'left'};
+            text-align: ${isUser && !member ? 'right' : 'left'};
         `;
         const ts = new Date(msg.timestamp);
-        timeSpan.textContent = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const fmt = settings.timeFormat || 'HH:mm';
+        let timeStr;
+        if (fmt === 'HH:mm:ss') {
+            timeStr = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        } else if (fmt === 'h:mm AM/PM') {
+            timeStr = ts.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        } else if (fmt === 'h:mm:ss AM/PM') {
+            timeStr = ts.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true });
+        } else {
+            timeStr = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+        timeSpan.textContent = timeStr;
 
-        if (msg.sender === 'user') {
+        // 组装消息布局
+        if (isUser && !member) {
+            // 我发送的消息：气泡在右，头像在右
             bubbleDiv.appendChild(timeSpan);
             msgWrapper.appendChild(bubbleDiv);
             msgWrapper.appendChild(avatarDiv);
             msgWrapper.style.justifyContent = 'flex-end';
         } else {
+            // 对方/群成员消息：头像在左，气泡在左
             msgWrapper.appendChild(avatarDiv);
             bubbleDiv.appendChild(timeSpan);
             msgWrapper.appendChild(bubbleDiv);
@@ -2482,7 +2559,7 @@ async function generateMessagesSnapshot() {
     document.body.appendChild(container);
 
     try {
-        // 等待图片加载
+        // 等待所有图片加载完成
         const images = container.querySelectorAll('img');
         await Promise.all(Array.from(images).map(img => {
             if (img.complete) return Promise.resolve();
@@ -2514,4 +2591,3 @@ async function generateMessagesSnapshot() {
         if (isSnapshotMode) toggleSnapshotMode();
     }
 }
-
