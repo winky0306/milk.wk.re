@@ -2354,8 +2354,7 @@ function handleSnapshotSelection(messageId) {
     }
 }
 
-// 生成聊天截图
-// 生成聊天截图（修复群聊成员头像和名字显示）
+// 生成聊天截图（修复手机端群成员头像/名字显示问题）
 async function generateMessagesSnapshot() {
     if (selectedSnapshotMessages.length === 0) {
         showNotification('请至少选择一条消息', 'warning');
@@ -2364,11 +2363,66 @@ async function generateMessagesSnapshot() {
 
     showNotification('正在生成截图，请稍候...', 'info', 2000);
 
-    // 获取选中的消息对象（按原始顺序）
+    // 1. 重新获取最新的群聊设置（确保与当前状态一致）
+    let groupChatSettings = { enabled: false, showAvatar: true, showName: true, members: [] };
+    try {
+        const saved = localStorage.getItem('groupChatSettings');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            groupChatSettings = { ...groupChatSettings, ...parsed };
+            if (!groupChatSettings.members) groupChatSettings.members = [];
+        }
+    } catch (e) { console.warn('读取群聊设置失败', e); }
+
+    const isGroupMode = groupChatSettings.enabled === true;
+    const showGroupName = isGroupMode && groupChatSettings.showName === true;
+
+    // 2. 辅助函数：异步加载单个成员的头像（如果还没有 dataURL）
+    async function ensureMemberAvatar(member) {
+        if (!member) return null;
+        // 已有 dataURL 直接返回
+        if (member.avatar && typeof member.avatar === 'string' && member.avatar.startsWith('data:')) {
+            return member.avatar;
+        }
+        // 如果有 avatarRef，尝试从 localforage 读取
+        if (member.avatarRef && window.localforage) {
+            try {
+                const stored = await localforage.getItem(member.avatarRef);
+                if (stored && typeof stored === 'string') {
+                    member.avatar = stored;   // 缓存到成员对象
+                    return stored;
+                }
+            } catch (e) { console.warn('加载成员头像失败', e); }
+        }
+        return null;
+    }
+
+    // 3. 获取选中的消息（按原始顺序）
     const selectedMsgs = messages.filter(m => selectedSnapshotMessages.includes(m.id))
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    // 创建临时容器
+    // 4. 预加载所有涉及到的成员的头像
+    const memberPromises = [];
+    const msgMemberMap = new Map(); // 记录每条消息对应的成员对象
+
+    for (const msg of selectedMsgs) {
+        // 只处理非 user 且群聊模式下的消息
+        if (msg.sender !== 'user' && isGroupMode && groupChatSettings.members.length) {
+            // 根据消息 ID 计算成员（与 getGroupMemberForMessage 算法一致）
+            let seed = 0;
+            const idStr = String(msg.id);
+            for (let i = 0; i < idStr.length; i++) seed += idStr.charCodeAt(i) * (i + 1);
+            const member = groupChatSettings.members[seed % groupChatSettings.members.length];
+            if (member) {
+                msgMemberMap.set(msg.id, member);
+                memberPromises.push(ensureMemberAvatar(member));
+            }
+        }
+    }
+    // 等待所有成员头像加载完成
+    await Promise.all(memberPromises);
+
+    // 5. 创建临时容器
     const container = document.createElement('div');
     container.className = 'snapshot-preview-container';
     container.style.cssText = `
@@ -2382,7 +2436,7 @@ async function generateMessagesSnapshot() {
         z-index: -1;
     `;
 
-    // 添加标题头
+    // 标题头
     const header = document.createElement('div');
     header.className = 'snapshot-header';
     header.style.cssText = `
@@ -2396,31 +2450,11 @@ async function generateMessagesSnapshot() {
     header.innerHTML = `📸 聊天截图 · ${new Date().toLocaleString()}`;
     container.appendChild(header);
 
-    // 修复：正确获取群聊状态（使用全局 groupChatSettings 变量）
-    const isGroupMode = typeof window.groupChatSettings !== 'undefined' && window.groupChatSettings.enabled === true;
-    const showGroupName = isGroupMode && window.groupChatSettings.showName === true;
-    const getGroupMember = (typeof window.getGroupMemberForMessage === 'function')
-        ? window.getGroupMemberForMessage
-        : null;
-
-    // 辅助函数：获取消息所属的群成员
-    function getMemberForMessage(msg) {
-        if (!isGroupMode || !getGroupMember) return null;
-        try {
-            return getGroupMember(msg.id);
-        } catch (e) {
-            return null;
-        }
-    }
-
-    // 渲染选中的消息
+    // 6. 渲染每条消息（此时成员头像已就绪）
     for (let i = 0; i < selectedMsgs.length; i++) {
         const msg = selectedMsgs[i];
-        const member = getMemberForMessage(msg);
-
-        // 判断是否显示为发送方（我）还是接收方（对方/群成员）
+        const member = msgMemberMap.get(msg.id);
         const isUser = (msg.sender === 'user');
-        // 群成员消息统一视为接收方样式
         const isReceived = !isUser || (member !== null);
 
         const msgWrapper = document.createElement('div');
@@ -2432,7 +2466,7 @@ async function generateMessagesSnapshot() {
             align-items: flex-start;
         `;
 
-        // ----- 头像部分 -----
+        // 头像部分
         const avatarDiv = document.createElement('div');
         avatarDiv.className = 'snapshot-avatar';
         avatarDiv.style.cssText = `
@@ -2448,7 +2482,7 @@ async function generateMessagesSnapshot() {
         `;
 
         let avatarSrc = null;
-        let defaultIcon = '<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>';
+        const defaultIcon = '<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>';
 
         if (member && member.avatar) {
             avatarSrc = member.avatar;
@@ -2466,7 +2500,7 @@ async function generateMessagesSnapshot() {
             avatarDiv.innerHTML = defaultIcon;
         }
 
-        // ----- 气泡内容 -----
+        // 气泡内容
         const bubbleDiv = document.createElement('div');
         bubbleDiv.className = `snapshot-bubble ${isUser && !member ? 'snapshot-sent' : 'snapshot-received'}`;
         bubbleDiv.style.cssText = `
@@ -2480,7 +2514,7 @@ async function generateMessagesSnapshot() {
             word-break: break-word;
         `;
 
-        // 群聊模式显示成员名字（如果开启）
+        // 群聊模式显示成员名字
         if (isGroupMode && showGroupName && member) {
             const nameLabel = document.createElement('div');
             nameLabel.className = 'snapshot-group-name';
@@ -2542,27 +2576,24 @@ async function generateMessagesSnapshot() {
         }
         timeSpan.textContent = timeStr;
 
-        // 组装消息布局
+        // 组装布局
         if (isUser && !member) {
-            // 我发送的消息：气泡在右，头像在右
             bubbleDiv.appendChild(timeSpan);
             msgWrapper.appendChild(bubbleDiv);
             msgWrapper.appendChild(avatarDiv);
             msgWrapper.style.justifyContent = 'flex-end';
         } else {
-            // 对方/群成员消息：头像在左，气泡在左
             msgWrapper.appendChild(avatarDiv);
             bubbleDiv.appendChild(timeSpan);
             msgWrapper.appendChild(bubbleDiv);
         }
-
         container.appendChild(msgWrapper);
     }
 
     document.body.appendChild(container);
 
     try {
-        // 等待所有图片加载完成
+        // 等待所有图片（包括消息内图片和成员头像）加载完成
         const images = container.querySelectorAll('img');
         await Promise.all(Array.from(images).map(img => {
             if (img.complete) return Promise.resolve();
@@ -2590,7 +2621,6 @@ async function generateMessagesSnapshot() {
         showNotification('截图生成失败，请重试', 'error');
     } finally {
         document.body.removeChild(container);
-        // 退出截图模式
         if (isSnapshotMode) toggleSnapshotMode();
     }
 }
