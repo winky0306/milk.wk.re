@@ -10787,3 +10787,70 @@
             border-color: var(--accent-color) !important;
             outline: none;
         }
+/* 截图/批量收藏选中高亮样式 */
+.message-wrapper.selected {
+    background: rgba(var(--accent-color-rgb), 0.08);
+    border-radius: 12px;
+    transition: background 0.2s ease;
+    margin: 2px 0;
+}
+
+    .message-wrapper.selected .message {
+        box-shadow: 0 0 0 2px var(--accent-color);
+    }
+
+/* 截图模式底部操作栏样式 */
+.snapshot-actions {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 12px;
+    background: var(--secondary-bg);
+    padding: 10px 20px;
+    border-radius: 40px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    z-index: 10000;
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border-color);
+    animation: fadeInUp 0.2s ease;
+}
+
+.snapshot-action-btn {
+    padding: 8px 18px;
+    border-radius: 30px;
+    border: none;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: var(--font-family);
+}
+
+.snapshot-cancel-btn {
+    background: rgba(255, 80, 80, 0.1);
+    color: #ff5050;
+}
+
+.snapshot-confirm-btn {
+    background: var(--accent-color);
+    color: white;
+}
+
+    .snapshot-confirm-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}

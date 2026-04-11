@@ -1058,6 +1058,17 @@ function createMessageFragment(msg, prevMsg, nextMsg, lastSenderRef) {
     wrapper.className = `message-wrapper ${msg.sender === 'user' ? 'sent' : 'received'}`;
     wrapper.dataset.id = msg.id;
     wrapper.dataset.msgId = msg.id;
+    // 在这之后添加以下高亮类判断代码：
+    // 截图多选模式下的选中高亮
+    if (typeof isSnapshotMode !== 'undefined' && isSnapshotMode &&
+        typeof selectedSnapshotMessages !== 'undefined' && selectedSnapshotMessages.includes(msg.id)) {
+        wrapper.classList.add('selected');
+    }
+    // 批量收藏模式下的选中高亮
+    if (typeof isBatchFavoriteMode !== 'undefined' && isBatchFavoriteMode &&
+        typeof selectedMessages !== 'undefined' && selectedMessages.includes(msg.id)) {
+        wrapper.classList.add('selected');
+    }
 
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'message-avatar';
@@ -1140,6 +1151,7 @@ function createMessageFragment(msg, prevMsg, nextMsg, lastSenderRef) {
     let actionsHTML = '';
     if (settings.replyEnabled) actionsHTML += `<button class="meta-action-btn reply-btn" title="回复"><i class="fas fa-reply"></i></button>`;
     const starIcon = msg.favorited ? 'fas fa-star' : 'far fa-star';
+    actionsHTML += `<button class="meta-action-btn snapshot-action-btn" title="截图选择"><i class="fas fa-camera"></i></button>`;  // 新增相机按钮
     actionsHTML += `<button class="meta-action-btn favorite-action-btn ${msg.favorited ? 'favorited' : ''}" title="${msg.favorited ? '取消收藏' : '收藏'}"><i class="${starIcon}"></i></button>`;
     actionsHTML += `<button class="meta-action-btn delete-btn" title="删除"><i class="fas fa-trash-alt"></i></button>`;
     const actionsDiv = document.createElement('div');
@@ -2273,5 +2285,233 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// ==================== 截图多选功能 ====================
+function toggleSnapshotMode() {
+    isSnapshotMode = !isSnapshotMode;
 
+    if (isSnapshotMode) {
+        // 如果批量收藏模式开启，先关闭它
+        if (typeof isBatchFavoriteMode !== 'undefined' && isBatchFavoriteMode) {
+            toggleBatchFavoriteMode();
+        }
+        selectedSnapshotMessages = [];
+        document.body.classList.add('snapshot-mode');
+        showSnapshotActions();
+        showNotification('截图选择模式已开启，点击消息进行选择', 'info', 2500);
+    } else {
+        document.body.classList.remove('snapshot-mode');
+        hideSnapshotActions();
+        selectedSnapshotMessages = [];
+    }
+    renderMessages(true);
+}
+
+function showSnapshotActions() {
+    if (document.querySelector('.snapshot-actions')) return;
+
+    const actions = document.createElement('div');
+    actions.className = 'snapshot-actions';
+    actions.innerHTML = `
+        <button class="snapshot-action-btn snapshot-cancel-btn">
+            <i class="fas fa-times"></i> 取消
+        </button>
+        <button class="snapshot-action-btn snapshot-confirm-btn" disabled>
+            <i class="fas fa-camera"></i> 生成截图 (0)
+        </button>
+    `;
+    document.body.appendChild(actions);
+
+    actions.querySelector('.snapshot-cancel-btn').addEventListener('click', () => {
+        if (isSnapshotMode) toggleSnapshotMode();
+    });
+
+    window.updateSnapshotConfirmBtn = function (count) {
+        const btn = document.querySelector('.snapshot-confirm-btn');
+        if (btn) {
+            btn.disabled = (count === 0);
+            btn.innerHTML = `<i class="fas fa-camera"></i> 生成截图 (${count})`;
+        }
+    };
+}
+
+function hideSnapshotActions() {
+    const actions = document.querySelector('.snapshot-actions');
+    if (actions) actions.remove();
+}
+
+// 消息点击时的截图选择处理（需要在 initChatActionListeners 中调用）
+function handleSnapshotSelection(messageId) {
+    const index = selectedSnapshotMessages.indexOf(messageId);
+    if (index > -1) {
+        selectedSnapshotMessages.splice(index, 1);
+    } else {
+        selectedSnapshotMessages.push(messageId);
+    }
+    // 重新渲染以更新高亮
+    renderMessages(true);
+    if (window.updateSnapshotConfirmBtn) {
+        window.updateSnapshotConfirmBtn(selectedSnapshotMessages.length);
+    }
+}
+
+// 生成聊天截图
+async function generateMessagesSnapshot() {
+    if (selectedSnapshotMessages.length === 0) {
+        showNotification('请至少选择一条消息', 'warning');
+        return;
+    }
+
+    showNotification('正在生成截图，请稍候...', 'info', 2000);
+
+    // 获取选中的消息对象（按原始顺序）
+    const selectedMsgs = messages.filter(m => selectedSnapshotMessages.includes(m.id))
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    // 创建临时容器
+    const container = document.createElement('div');
+    container.className = 'snapshot-preview-container';
+    container.style.cssText = `
+        position: fixed;
+        left: -9999px;
+        top: 0;
+        width: 380px;
+        background: var(--primary-bg);
+        padding: 20px 12px;
+        font-family: var(--font-family);
+        z-index: -1;
+    `;
+
+    // 添加标题头
+    const header = document.createElement('div');
+    header.className = 'snapshot-header';
+    header.style.cssText = `
+        text-align: center;
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid var(--border-color);
+        font-size: 14px;
+        color: var(--text-secondary);
+    `;
+    header.innerHTML = `📸 聊天截图 · ${new Date().toLocaleString()}`;
+    container.appendChild(header);
+
+    // 渲染选中的消息
+    for (const msg of selectedMsgs) {
+        const msgWrapper = document.createElement('div');
+        msgWrapper.className = `snapshot-msg-wrapper ${msg.sender === 'user' ? 'sent' : 'received'}`;
+        msgWrapper.style.cssText = `
+            display: flex;
+            margin-bottom: 16px;
+            gap: 8px;
+            align-items: flex-start;
+        `;
+
+        // 头像
+        const avatarDiv = document.createElement('div');
+        avatarDiv.className = 'snapshot-avatar';
+        avatarDiv.style.cssText = `
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            overflow: hidden;
+            flex-shrink: 0;
+            background: var(--accent-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        const isUser = msg.sender === 'user';
+        const avatarSrc = isUser
+            ? (DOMElements.me.avatar.querySelector('img')?.src || '')
+            : (DOMElements.partner.avatar.querySelector('img')?.src || '');
+        if (avatarSrc) {
+            avatarDiv.innerHTML = `<img src="${avatarSrc}" style="width:100%;height:100%;object-fit:cover;">`;
+        } else {
+            avatarDiv.innerHTML = `<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>`;
+        }
+
+        // 气泡内容
+        const bubbleDiv = document.createElement('div');
+        bubbleDiv.className = `snapshot-bubble ${msg.sender === 'user' ? 'snapshot-sent' : 'snapshot-received'}`;
+        bubbleDiv.style.cssText = `
+            max-width: 260px;
+            padding: 8px 12px;
+            border-radius: ${msg.sender === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px'};
+            background: ${msg.sender === 'user' ? 'var(--message-sent-bg)' : 'var(--message-received-bg)'};
+            color: ${msg.sender === 'user' ? 'var(--message-sent-text)' : 'var(--message-received-text)'};
+            font-size: 14px;
+            line-height: 1.5;
+            word-break: break-word;
+        `;
+
+        let contentHtml = '';
+        if (msg.text) {
+            contentHtml += `<div>${msg.text.replace(/\n/g, '<br>')}</div>`;
+        }
+        if (msg.image) {
+            contentHtml += `<img src="${msg.image}" style="max-width:100%;max-height:150px;border-radius:8px;margin-top:6px;">`;
+        }
+        bubbleDiv.innerHTML = contentHtml;
+
+        // 时间戳
+        const timeSpan = document.createElement('div');
+        timeSpan.className = 'snapshot-time';
+        timeSpan.style.cssText = `
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+            text-align: ${msg.sender === 'user' ? 'right' : 'left'};
+        `;
+        const ts = new Date(msg.timestamp);
+        timeSpan.textContent = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+        if (msg.sender === 'user') {
+            bubbleDiv.appendChild(timeSpan);
+            msgWrapper.appendChild(bubbleDiv);
+            msgWrapper.appendChild(avatarDiv);
+            msgWrapper.style.justifyContent = 'flex-end';
+        } else {
+            msgWrapper.appendChild(avatarDiv);
+            bubbleDiv.appendChild(timeSpan);
+            msgWrapper.appendChild(bubbleDiv);
+        }
+
+        container.appendChild(msgWrapper);
+    }
+
+    document.body.appendChild(container);
+
+    try {
+        // 等待图片加载
+        const images = container.querySelectorAll('img');
+        await Promise.all(Array.from(images).map(img => {
+            if (img.complete) return Promise.resolve();
+            return new Promise(resolve => { img.onload = img.onerror = resolve; });
+        }));
+
+        const canvas = await html2canvas(container, {
+            scale: 2,
+            backgroundColor: getComputedStyle(document.documentElement).getPropertyValue('--primary-bg').trim() || '#ffffff',
+            logging: false,
+            useCORS: true,
+            allowTaint: false
+        });
+
+        // 下载图片
+        const link = document.createElement('a');
+        const timestamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+        link.download = `chat-snapshot-${timestamp}.png`;
+        link.href = canvas.toDataURL();
+        link.click();
+
+        showNotification('截图已保存', 'success');
+    } catch (err) {
+        console.error('截图生成失败:', err);
+        showNotification('截图生成失败，请重试', 'error');
+    } finally {
+        document.body.removeChild(container);
+        // 退出截图模式
+        if (isSnapshotMode) toggleSnapshotMode();
+    }
+}
 

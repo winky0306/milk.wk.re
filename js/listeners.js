@@ -64,6 +64,29 @@ function initChatActionListeners() {
                     return;
                 }
 
+                // 在 initChatActionListeners 函数内部，现有的 favoriteBtn 判断后面添加：
+
+                const snapshotBtn = e.target.closest('.snapshot-action-btn');
+                if (snapshotBtn) {
+                    if (!isSnapshotMode) {
+                        toggleSnapshotMode();
+                    }
+                    const wrapper = e.target.closest('.message-wrapper');
+                    const messageId = Number(wrapper.dataset.id);
+                    handleSnapshotSelection(messageId);
+                    return;
+                }
+
+                // 同时需要在批量收藏模式判断之前，添加截图选择模式的点击处理（与批量收藏类似）
+                if (isSnapshotMode) {
+                    const wrapper = e.target.closest('.message-wrapper');
+                    if (wrapper && !e.target.closest('.message-meta-actions')) {
+                        const messageId = Number(wrapper.dataset.id);
+                        handleSnapshotSelection(messageId);
+                        return;
+                    }
+                }
+
                 const target = e.target.closest('.meta-action-btn');
                 if (!target) return;
                 
@@ -137,7 +160,14 @@ if (target.classList.contains('delete-btn')) {
                     batchMessages = [];
                 }
             });
+    // 监听截图确认按钮（通过事件委托）
+    document.addEventListener('click', (e) => {
+        const confirmBtn = e.target.closest('.snapshot-confirm-btn');
+        if (confirmBtn && isSnapshotMode && selectedSnapshotMessages.length > 0) {
+            generateMessagesSnapshot();
         }
+    });
+}
 
         function initModalListeners() {
             const modals = document.querySelectorAll('.modal');

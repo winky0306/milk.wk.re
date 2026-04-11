@@ -7,6 +7,9 @@
         let SESSION_ID = null;
         let autoSendTimer = null; 
         let autoEnvelopeTimer = null;  // 梦角主动写信定时器
+// 截图多选模式
+        let isSnapshotMode = false;
+        let selectedSnapshotMessages = [];
         let sessionList = [];
         let messages = [];
         let settings = {};
