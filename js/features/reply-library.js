@@ -1,8 +1,5 @@
 if (typeof customReplyGroups === 'undefined') window.customReplyGroups = [];
 if (typeof replyGroupsEnabled === 'undefined') window.replyGroupsEnabled = false;
-// 为 emoji 和 sticker 添加独立的分组和屏蔽集合
-if (typeof customEmojiGroups === 'undefined') window.customEmojiGroups = [];
-if (typeof customStickerGroups === 'undefined') window.customStickerGroups = [];
 
 let _batchSelectedIndices = new Set();
 let _batchModeActive = false;
@@ -11,9 +8,6 @@ let _searchVisible = false;
 let _searchQuery = '';
 let _searchDebounceTimer = null;
 let _activeGroupFilter = null; 
-// 批量选中的索引（分别用于 emoji 和 sticker）
-let _batchSelectedEmojiIndices = new Set();
-let _batchSelectedStickerIndices = new Set();
 
 const GROUP_COLORS = [
     '#FF6B6B','#FF8E53','#FFC542','#51CF66',
@@ -137,14 +131,8 @@ function _renderListContentOnly() {
         else if (currentSubTab === 'intros') itemsToRender = customIntros;
     }
 
-    if (renderType === 'emoji') {
-        _renderEmojiWithGroups(list, itemsToRender);
-        return;
-    }
-    if (renderType === 'image') {
-        _renderStickerWithGroups(list, itemsToRender);
-        return;
-    }
+    if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
+    if (renderType === 'image') { _renderStickerTab(list, itemsToRender); return; }
 
     const q = _searchQuery.toLowerCase().trim();
     const filtered = q ? itemsToRender.filter(item => item.toLowerCase().includes(q)) : itemsToRender;
@@ -230,8 +218,8 @@ function renderReplyLibrary() {
         else if (currentSubTab === 'intros') itemsToRender = customIntros;
     }
 
-    if (renderType === 'emoji') { _renderEmojiWithGroups(list, itemsToRender); return; }
-    if (renderType === 'image') { _renderStickerWithGroups(list, itemsToRender); return; }
+    if (renderType === 'emoji') { _renderEmojiTab(list, itemsToRender); return; }
+    if (renderType === 'image') { _renderStickerTab(list, itemsToRender); return; }
 
     const q = _searchQuery.toLowerCase().trim();
     let filtered = q ? itemsToRender.filter(item => item.toLowerCase().includes(q)) : itemsToRender;
@@ -251,11 +239,8 @@ function renderReplyLibrary() {
 function _renderModernToolbar() {
     let toolbar = document.getElementById('batch-ops-toolbar');
     const isMainCustom = currentMajorTab === 'reply' && currentSubTab === 'custom';
-    const isEmojiTab = currentMajorTab === 'reply' && currentSubTab === 'emojis';
-    const isStickerTab = currentMajorTab === 'reply' && currentSubTab === 'stickers';
-    const showGroupsBtn = isMainCustom || isEmojiTab || isStickerTab;
-    const isStickersTab = isStickerTab;
-    const canBatch = isMainCustom || isStickersTab || isEmojiTab;
+    const isStickersTab = currentMajorTab === 'reply' && currentSubTab === 'stickers';
+    const canBatch = isMainCustom || isStickersTab;
 
     if (!toolbar) {
         toolbar = document.createElement('div');
@@ -266,12 +251,7 @@ function _renderModernToolbar() {
     toolbar.style.display = '';
 
     const disabledSet = _getDisabledItemsSet();
-    let totalItems = 0;
-    if (isMainCustom) totalItems = customReplies.length;
-    else if (isEmojiTab) {
-        const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-        totalItems = [...new Set(allEmojis)].length;
-    } else if (isStickersTab) totalItems = stickerLibrary.length;
+    const totalItems = isMainCustom ? customReplies.length : (isStickersTab ? stickerLibrary.length : 0);
     const selectedCount = _batchSelectedIndices.size;
 
     const addBtnLabel = (() => {
@@ -280,101 +260,39 @@ function _renderModernToolbar() {
     })();
 
     let groupFilterHtml = '';
-    // 主字卡的分组筛选
     if (isMainCustom && customReplyGroups && customReplyGroups.length > 0) {
         const allCount = customReplies.length;
         const ungroupedCount = customReplies.filter(item =>
             !customReplyGroups.some(g => g.items && g.items.includes(item))
         ).length;
         groupFilterHtml = `
-        <div id="group-filter-pills" style="
-            display:flex;gap:6px;overflow-x:auto;padding:8px 15px 0;
-            scrollbar-width:none;-webkit-overflow-scrolling:touch;flex-shrink:0;
-        ">
-            <button class="gfp-btn ${_activeGroupFilter === null ? 'gfp-active' : ''}" data-filter="all">
-                全部 <span class="gfp-count">${allCount}</span>
-            </button>
-            <button class="gfp-btn ${_activeGroupFilter === 'ungrouped' ? 'gfp-active' : ''}" data-filter="ungrouped">
-                未分组 <span class="gfp-count">${ungroupedCount}</span>
-            </button>
-            ${customReplyGroups.map(g => {
-            const cnt = (g.items || []).filter(item => customReplies.includes(item)).length;
-            return `<button class="gfp-btn ${_activeGroupFilter === g.id ? 'gfp-active' : ''} ${g.disabled ? 'gfp-disabled' : ''}"
-                    data-filter="${g.id}"
-                    style="${_activeGroupFilter === g.id ? `background:${g.color}22;border-color:${g.color};color:${g.color};` : ''}">
-                    <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${g.color || '#aaa'};margin-right:4px;flex-shrink:0;vertical-align:middle;"></span>
-                    ${g.name} <span class="gfp-count">${cnt}</span>
-                    ${g.disabled ? `<span style="font-size:9px;opacity:0.7;margin-left:2px;">${ICONS.eyeOff}</span>` : ''}
-                </button>`;
-        }).join('')}
-        </div>
-    `;
-    }
-    // Emoji 分组筛选
-    else if (isEmojiTab && customEmojiGroups && customEmojiGroups.length > 0) {
-        const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-        const allCount = allEmojis.length;
-        const ungroupedCount = allEmojis.filter(item =>
-            !customEmojiGroups.some(g => g.items && g.items.includes(item))
-        ).length;
-        groupFilterHtml = `
-        <div id="group-filter-pills" style="
-            display:flex;gap:6px;overflow-x:auto;padding:8px 15px 0;
-            scrollbar-width:none;-webkit-overflow-scrolling:touch;flex-shrink:0;
-        ">
-            <button class="gfp-btn ${_activeGroupFilter === null ? 'gfp-active' : ''}" data-filter="all">
-                全部 <span class="gfp-count">${allCount}</span>
-            </button>
-            <button class="gfp-btn ${_activeGroupFilter === 'ungrouped' ? 'gfp-active' : ''}" data-filter="ungrouped">
-                未分组 <span class="gfp-count">${ungroupedCount}</span>
-            </button>
-            ${customEmojiGroups.map(g => {
-            const cnt = (g.items || []).filter(item => allEmojis.includes(item)).length;
-            return `<button class="gfp-btn ${_activeGroupFilter === g.id ? 'gfp-active' : ''} ${g.disabled ? 'gfp-disabled' : ''}"
-                    data-filter="${g.id}"
-                    style="${_activeGroupFilter === g.id ? `background:${g.color}22;border-color:${g.color};color:${g.color};` : ''}">
-                    <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${g.color || '#aaa'};margin-right:4px;flex-shrink:0;vertical-align:middle;"></span>
-                    ${g.name} <span class="gfp-count">${cnt}</span>
-                    ${g.disabled ? `<span style="font-size:9px;opacity:0.7;margin-left:2px;">${ICONS.eyeOff}</span>` : ''}
-                </button>`;
-        }).join('')}
-        </div>
-    `;
-    }
-    // 贴纸分组筛选
-    else if (isStickerTab && customStickerGroups && customStickerGroups.length > 0) {
-        const allCount = stickerLibrary.length;
-        const ungroupedCount = stickerLibrary.filter(item =>
-            !customStickerGroups.some(g => g.items && g.items.includes(item))
-        ).length;
-        groupFilterHtml = `
-        <div id="group-filter-pills" style="
-            display:flex;gap:6px;overflow-x:auto;padding:8px 15px 0;
-            scrollbar-width:none;-webkit-overflow-scrolling:touch;flex-shrink:0;
-        ">
-            <button class="gfp-btn ${_activeGroupFilter === null ? 'gfp-active' : ''}" data-filter="all">
-                全部 <span class="gfp-count">${allCount}</span>
-            </button>
-            <button class="gfp-btn ${_activeGroupFilter === 'ungrouped' ? 'gfp-active' : ''}" data-filter="ungrouped">
-                未分组 <span class="gfp-count">${ungroupedCount}</span>
-            </button>
-            ${customStickerGroups.map(g => {
-            const cnt = (g.items || []).filter(item => stickerLibrary.includes(item)).length;
-            return `<button class="gfp-btn ${_activeGroupFilter === g.id ? 'gfp-active' : ''} ${g.disabled ? 'gfp-disabled' : ''}"
-                    data-filter="${g.id}"
-                    style="${_activeGroupFilter === g.id ? `background:${g.color}22;border-color:${g.color};color:${g.color};` : ''}">
-                    <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${g.color || '#aaa'};margin-right:4px;flex-shrink:0;vertical-align:middle;"></span>
-                    ${g.name} <span class="gfp-count">${cnt}</span>
-                    ${g.disabled ? `<span style="font-size:9px;opacity:0.7;margin-left:2px;">${ICONS.eyeOff}</span>` : ''}
-                </button>`;
-        }).join('')}
-        </div>
-    `;
+            <div id="group-filter-pills" style="
+                display:flex;gap:6px;overflow-x:auto;padding:8px 15px 0;
+                scrollbar-width:none;-webkit-overflow-scrolling:touch;flex-shrink:0;
+            ">
+                <button class="gfp-btn ${_activeGroupFilter === null ? 'gfp-active' : ''}" data-filter="all">
+                    全部 <span class="gfp-count">${allCount}</span>
+                </button>
+                <button class="gfp-btn ${_activeGroupFilter === 'ungrouped' ? 'gfp-active' : ''}" data-filter="ungrouped">
+                    未分组 <span class="gfp-count">${ungroupedCount}</span>
+                </button>
+                ${customReplyGroups.map(g => {
+                    const cnt = (g.items || []).filter(item => customReplies.includes(item)).length;
+                    return `<button class="gfp-btn ${_activeGroupFilter === g.id ? 'gfp-active' : ''} ${g.disabled ? 'gfp-disabled' : ''}"
+                        data-filter="${g.id}"
+                        style="${_activeGroupFilter === g.id ? `background:${g.color}22;border-color:${g.color};color:${g.color};` : ''}">
+                        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${g.color || '#aaa'};margin-right:4px;flex-shrink:0;vertical-align:middle;"></span>
+                        ${g.name} <span class="gfp-count">${cnt}</span>
+                        ${g.disabled ? `<span style="font-size:9px;opacity:0.7;margin-left:2px;">${ICONS.eyeOff}</span>` : ''}
+                    </button>`;
+                }).join('')}
+            </div>
+        `;
     }
 
     let batchActionsHtml = '';
     if (_batchModeActive) {
-        const showGroupBtn = isMainCustom || isEmojiTab || isStickerTab;
+        const showGroupBtn = isMainCustom;
         batchActionsHtml = `
             <div id="batch-action-bar" style="
                 display:flex;align-items:center;gap:6px;padding:8px 15px;
@@ -458,9 +376,9 @@ function _renderModernToolbar() {
             <button class="toolbar-icon-btn ${_searchVisible ? 'active' : ''}" id="tb-search-btn" title="搜索">
                 ${ICONS.search}
             </button>
-           ${showGroupsBtn ? `
+            ${isMainCustom ? `
             <button class="toolbar-icon-btn" id="tb-groups-btn" title="分组管理">
-                     ${ICONS.folder}
+                ${ICONS.folder}
             </button>` : ''}
             <button class="toolbar-icon-btn" id="tb-dedup-btn" title="一键去重">
                 ${ICONS.dedup}
@@ -525,7 +443,7 @@ function _renderModernToolbar() {
         toolbar.querySelector('#tb-search-clear').onclick = () => { _searchVisible = false; _searchQuery = ''; renderReplyLibrary(); };
     }
 
-    if (showGroupsBtn) toolbar.querySelector('#tb-groups-btn')?.addEventListener('click', _showGroupManager);
+    if (isMainCustom) toolbar.querySelector('#tb-groups-btn')?.addEventListener('click', _showGroupManager);
     const tbBatch = toolbar.querySelector('#tb-batch-btn');
     if (tbBatch) {
         tbBatch.onclick = () => {
@@ -553,96 +471,50 @@ function _renderModernToolbar() {
         toolbar.querySelector('#batch-select-all-btn')?.addEventListener('click', () => {
             if (_batchSelectedIndices.size === totalItems) _batchSelectedIndices.clear();
             else {
-                let pool;
-                if (isMainCustom) pool = customReplies;
-                else if (isEmojiTab) {
-                    const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-                    const uniqueEmojis = [...new Set(allEmojis)];
-                    pool = uniqueEmojis;
-                } else if (isStickersTab) pool = stickerLibrary;
-                else pool = [];
+                const pool = isMainCustom ? customReplies : stickerLibrary;
                 pool.forEach((_, i) => _batchSelectedIndices.add(i));
             }
             renderReplyLibrary();
         });
-        // 批量分组按钮
-        const batchGroupBtn = toolbar.querySelector('#batch-group-btn');
-        if (batchGroupBtn) {
-            batchGroupBtn.onclick = () => {
-                if (_batchSelectedIndices.size === 0) return;
-                if (isMainCustom) _showBatchGroupPicker();
-                else if (isEmojiTab) _showBatchGroupPickerForEmoji();
-                else if (isStickersTab) _showBatchGroupPickerForSticker();
-            };
-        }
-        // 批量屏蔽按钮
-        const batchDisableBtn = toolbar.querySelector('#batch-disable-btn');
-        if (batchDisableBtn) {
-            batchDisableBtn.onclick = () => {
-                if (_batchSelectedIndices.size === 0) return;
-                if (isMainCustom) _batchToggleDisable();
-                else if (isEmojiTab) _batchToggleDisableEmoji();
-                else if (isStickersTab) _batchToggleDisableStickers();
-            };
-        }
-        // 批量删除按钮
-        const batchDeleteBtn = toolbar.querySelector('#batch-delete-btn');
-        if (batchDeleteBtn) {
-            batchDeleteBtn.onclick = () => {
-                if (_batchSelectedIndices.size === 0) return;
-                if (isMainCustom) {
-                    if (!confirm(`确定删除选中的 ${_batchSelectedIndices.size} 条？`)) return;
-                    const indices = [..._batchSelectedIndices].sort((a, b) => b - a);
-                    const deletedTexts = indices.map(i => customReplies[i]);
-                    indices.forEach(i => customReplies.splice(i, 1));
-                    if (customReplyGroups) {
-                        customReplyGroups.forEach(g => {
-                            if (g.items) g.items = g.items.filter(t => !deletedTexts.includes(t));
-                        });
-                    }
-                    _batchSelectedIndices.clear();
-                    throttledSaveData();
-                    renderReplyLibrary();
-                    showNotification(`已删除 ${indices.length} 条`, 'success');
-                } else if (isEmojiTab) {
-                    if (!confirm(`确定删除选中的 ${_batchSelectedIndices.size} 个 Emoji？`)) return;
-                    const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-                    const uniqueEmojis = [...new Set(allEmojis)];
-                    const indices = [..._batchSelectedIndices].sort((a, b) => b - a);
-                    const deletedEmojis = indices.map(i => uniqueEmojis[i]).filter(e => customEmojis.includes(e));
-                    deletedEmojis.forEach(emoji => {
-                        const idx = customEmojis.indexOf(emoji);
-                        if (idx !== -1) customEmojis.splice(idx, 1);
+        toolbar.querySelector('#batch-group-btn')?.addEventListener('click', () => {
+            if (!isMainCustom) return;
+            if (_batchSelectedIndices.size === 0) return;
+            _showBatchGroupPicker();
+        });
+        toolbar.querySelector('#batch-disable-btn')?.addEventListener('click', () => {
+            if (_batchSelectedIndices.size === 0) return;
+            if (isStickersTab) _batchToggleDisableStickers();
+            else _batchToggleDisable();
+        });
+        toolbar.querySelector('#batch-delete-btn')?.addEventListener('click', () => {
+            if (_batchSelectedIndices.size === 0) return;
+            if (!confirm(`确定删除选中的 ${_batchSelectedIndices.size} 条？`)) return;
+            const indices = [..._batchSelectedIndices].sort((a, b) => b - a);
+            if (isStickersTab) {
+                const deleted = indices.map(i => stickerLibrary[i]).filter(Boolean);
+                indices.forEach(i => stickerLibrary.splice(i, 1));
+                // 同步清理已删除条目的“屏蔽集合”
+                const dis = _getDisabledStickerItemsSet();
+                deleted.forEach(d => dis.delete(d));
+                _saveDisabledStickerItemsSet(dis);
+                _batchSelectedIndices.clear();
+                throttledSaveData();
+                renderReplyLibrary();
+                showNotification(`已删除 ${indices.length} 个贴纸`, 'success');
+            } else {
+                const deletedTexts = indices.map(i => customReplies[i]);
+                indices.forEach(i => customReplies.splice(i, 1));
+                if (customReplyGroups) {
+                    customReplyGroups.forEach(g => {
+                        if (g.items) g.items = g.items.filter(t => !deletedTexts.includes(t));
                     });
-                    if (customEmojiGroups) {
-                        customEmojiGroups.forEach(g => {
-                            if (g.items) g.items = g.items.filter(e => !deletedEmojis.includes(e));
-                        });
-                    }
-                    _batchSelectedIndices.clear();
-                    throttledSaveData();
-                    renderReplyLibrary();
-                    showNotification(`已删除 ${deletedEmojis.length} 个 Emoji`, 'success');
-                } else if (isStickersTab) {
-                    if (!confirm(`确定删除选中的 ${_batchSelectedIndices.size} 个贴纸？`)) return;
-                    const indices = [..._batchSelectedIndices].sort((a, b) => b - a);
-                    const deleted = indices.map(i => stickerLibrary[i]).filter(Boolean);
-                    indices.forEach(i => stickerLibrary.splice(i, 1));
-                    const dis = _getDisabledStickerItemsSet();
-                    deleted.forEach(d => dis.delete(d));
-                    _saveDisabledStickerItemsSet(dis);
-                    if (customStickerGroups) {
-                        customStickerGroups.forEach(g => {
-                            if (g.items) g.items = g.items.filter(s => !deleted.includes(s));
-                        });
-                    }
-                    _batchSelectedIndices.clear();
-                    throttledSaveData();
-                    renderReplyLibrary();
-                    showNotification(`已删除 ${indices.length} 个贴纸`, 'success');
                 }
-            };
-        }
+                _batchSelectedIndices.clear();
+                throttledSaveData();
+                renderReplyLibrary();
+                showNotification(`已删除 ${indices.length} 条`, 'success');
+            }
+        });
     }
 }
 
@@ -699,88 +571,6 @@ function _renderCardViewWithGroups(list, items) {
     }
 }
 
-// 渲染单个 Emoji 分组块（支持批量选择）
-function _renderEmojiGroupBlock(list, group, items, isUngrouped = false, emojiIndexMap = new Map()) {
-    const section = document.createElement('div');
-    section.className = 'rl-group-block';
-    const isCollapsed = group._collapsed || false;
-    const isDisabled = group.disabled;
-    const colorDot = group.color || '#868E96';
-
-    section.innerHTML = `
-        <div class="rl-group-header${isCollapsed ? ' collapsed' : ''}" style="${isDisabled ? 'opacity:0.5;' : ''}">
-            <div class="rl-group-tag" title="${isDisabled ? '点击启用此分组' : '点击屏蔽此分组'}">
-                <span style="width:8px;height:8px;border-radius:50%;background:${colorDot};flex-shrink:0;"></span>
-                <span style="font-size:12px;font-weight:700;color:${colorDot};">${group.name}</span>
-                ${isDisabled ? '<span title="已屏蔽">🙈</span>' : ''}
-            </div>
-            <span style="font-size:11px;color:var(--text-secondary);">${items.length} 个</span>
-            <div style="flex:1;"></div>
-            ${!_batchModeActive && !isUngrouped ? `<button class="grp-edit-btn" style="width:26px;height:26px;border-radius:8px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;">✎</button>` : ''}
-            <div class="grp-chevron" style="transform:${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};">▼</div>
-        </div>
-        <div class="rl-group-body" style="display:${isCollapsed ? 'none' : 'block'};"></div>
-    `;
-    list.appendChild(section);
-
-    const body = section.querySelector('.rl-group-body');
-    body.style.display = 'grid';
-    body.style.gridTemplateColumns = 'repeat(3, 1fr)';
-    body.style.gap = '12px';
-    body.style.padding = '12px 8px';
-    body.style.justifyItems = 'center';
-    body.style.alignItems = 'center';
-
-    items.forEach(emoji => {
-        const emojiDiv = document.createElement('div');
-        emojiDiv.className = 'emoji-item';
-        if (_batchModeActive) {
-            const idx = emojiIndexMap.get(emoji);
-            const isSelected = idx !== undefined && _batchSelectedIndices.has(idx);
-            emojiDiv.style.position = 'relative';
-            emojiDiv.style.cursor = 'pointer';
-            emojiDiv.style.border = isSelected ? '2px solid var(--accent-color)' : 'none';
-            emojiDiv.style.backgroundColor = isSelected ? 'rgba(var(--accent-color-rgb), 0.1)' : '';
-            emojiDiv.onclick = (e) => {
-                e.stopPropagation();
-                if (idx !== undefined) {
-                    if (_batchSelectedIndices.has(idx)) _batchSelectedIndices.delete(idx);
-                    else _batchSelectedIndices.add(idx);
-                    renderReplyLibrary();
-                }
-            };
-        }
-        emojiDiv.textContent = emoji;
-        body.appendChild(emojiDiv);
-    });
-
-    const header = section.querySelector('.rl-group-header');
-    header.addEventListener('click', (e) => {
-        if (e.target.closest('.grp-edit-btn') || e.target.closest('.rl-group-tag')) return;
-        group._collapsed = !group._collapsed;
-        body.style.display = group._collapsed ? 'none' : 'block';
-        section.querySelector('.grp-chevron').style.transform = group._collapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
-    });
-
-    const tag = section.querySelector('.rl-group-tag');
-    if (tag && !isUngrouped) {
-        tag.addEventListener('click', (e) => {
-            e.stopPropagation();
-            group.disabled = !group.disabled;
-            throttledSaveData();
-            renderReplyLibrary();
-            showNotification(group.disabled ? `已屏蔽「${group.name}」` : `已启用「${group.name}」`, 'success');
-        });
-    }
-
-    const editBtn = section.querySelector('.grp-edit-btn');
-    if (editBtn) {
-        editBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            _showGroupEditor(group, 'emoji');
-        });
-    }
-}
 function _renderGroupBlock(list, group, groupItems, disabledSet, isUngrouped = false) {
     const section = document.createElement('div');
     section.className = 'rl-group-block';
@@ -1035,134 +825,6 @@ function _renderEmojiTab(list, itemsToRender) {
     }
 }
 
-// 简单的 Emoji 列表（无分组）
-function _renderSimpleEmojiList(list, emojis) {
-    list.innerHTML = '';
-    if (emojis.length === 0 && customEmojis.length === 0) {
-        list.innerHTML = renderEmptyState('暂无 Emoji');
-        return;
-    }
-    emojis.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'emoji-item';
-        div.textContent = item;
-        list.appendChild(div);
-    });
-    if (customEmojis.length > 0) {
-        const sep = document.createElement('div');
-        sep.style.cssText = 'grid-column:1/-1;font-size:11px;color:var(--text-secondary);padding:4px 2px 2px;border-top:1px dashed var(--border-color);margin-top:4px;';
-        sep.textContent = '— 自定义 —';
-        list.appendChild(sep);
-        customEmojis.forEach((item, idx) => {
-            const div = document.createElement('div');
-            div.className = 'emoji-item';
-            div.style.position = 'relative';
-            div.innerHTML = `<span style="pointer-events:none;">${item}</span><span class="emoji-custom-del" style="position:absolute;top:-4px;right:-4px;font-size:10px;background:var(--text-secondary);color:#fff;border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s;">×</span>`;
-            div.addEventListener('mouseenter', () => div.querySelector('.emoji-custom-del').style.opacity = '1');
-            div.addEventListener('mouseleave', () => div.querySelector('.emoji-custom-del').style.opacity = '0');
-            div.querySelector('.emoji-custom-del').addEventListener('click', e => {
-                e.stopPropagation();
-                customEmojis.splice(idx, 1);
-                throttledSaveData();
-                renderReplyLibrary();
-            });
-            list.appendChild(div);
-        });
-    }
-}
-
-// 平铺显示 Emoji（支持批量模式，不带分组栏）
-function _renderSimpleEmojiListWithBatch(list, emojis, emojiIndexMap) {
-    list.innerHTML = '';
-    if (emojis.length === 0) {
-        list.innerHTML = renderEmptyState('暂无内容');
-        return;
-    }
-    // 使用 grid 布局，样式与原来一致
-    list.style.display = 'grid';
-    list.style.gridTemplateColumns = 'repeat(auto-fill, minmax(48px, auto))';
-    list.style.gap = '8px';
-    list.style.padding = '8px';
-
-    emojis.forEach(emoji => {
-        const emojiDiv = document.createElement('div');
-        emojiDiv.className = 'emoji-item';
-        if (_batchModeActive) {
-            const idx = emojiIndexMap.get(emoji);
-            const isSelected = idx !== undefined && _batchSelectedIndices.has(idx);
-            emojiDiv.style.position = 'relative';
-            emojiDiv.style.cursor = 'pointer';
-            emojiDiv.style.border = isSelected ? '2px solid var(--accent-color)' : 'none';
-            emojiDiv.style.backgroundColor = isSelected ? 'rgba(var(--accent-color-rgb), 0.1)' : '';
-            emojiDiv.onclick = (e) => {
-                e.stopPropagation();
-                if (idx !== undefined) {
-                    if (_batchSelectedIndices.has(idx)) _batchSelectedIndices.delete(idx);
-                    else _batchSelectedIndices.add(idx);
-                    renderReplyLibrary();
-                }
-            };
-        }
-        emojiDiv.textContent = emoji;
-        list.appendChild(emojiDiv);
-    });
-}
-
-// Emoji 分组渲染主函数
-// Emoji 分组渲染主函数（支持批量）
-// Emoji 分组渲染主函数（支持筛选平铺）
-// Emoji 分组渲染主函数（支持筛选平铺）
-function _renderEmojiWithGroups(list, emojis) {
-    const allEmojis = [...emojis, ...customEmojis];
-    const uniqueEmojis = [...new Set(allEmojis)];
-
-    // 如果没有分组，直接简单列表
-    if (!customEmojiGroups || customEmojiGroups.length === 0) {
-        _renderSimpleEmojiList(list, uniqueEmojis);
-        return;
-    }
-
-    // 构建全局索引 Map（用于批量模式）
-    const emojiIndexMap = new Map();
-    uniqueEmojis.forEach((e, i) => emojiIndexMap.set(e, i));
-
-    // 根据 _activeGroupFilter 决定渲染方式
-    if (_activeGroupFilter === null || _activeGroupFilter === 'all') {
-        // 全部模式：收集所有 Emoji，平铺显示
-        if (uniqueEmojis.length === 0) {
-            list.innerHTML = renderEmptyState('暂无 Emoji');
-        } else {
-            _renderSimpleEmojiListWithBatch(list, uniqueEmojis, emojiIndexMap);
-        }
-    }
-    else if (_activeGroupFilter === 'ungrouped') {
-        // 未分组模式：平铺显示未分组的 Emoji
-        const groupedSet = new Set();
-        customEmojiGroups.forEach(g => {
-            (g.items || []).forEach(e => groupedSet.add(e));
-        });
-        const ungrouped = uniqueEmojis.filter(e => !groupedSet.has(e));
-        if (ungrouped.length === 0) {
-            list.innerHTML = renderEmptyState('所有 Emoji 均已分组');
-        } else {
-            _renderSimpleEmojiListWithBatch(list, ungrouped, emojiIndexMap);
-        }
-    }
-    else {
-        // 具体分组模式：平铺显示该分组内的 Emoji
-        const targetGroup = customEmojiGroups.find(g => g.id === _activeGroupFilter);
-        if (!targetGroup) {
-            list.innerHTML = renderEmptyState('分组不存在');
-            return;
-        }
-        const groupItems = (targetGroup.items || []).filter(e => uniqueEmojis.includes(e));
-        if (groupItems.length === 0) {
-            list.innerHTML = renderEmptyState('此分组暂无内容');
-        } else {
-            _renderSimpleEmojiListWithBatch(list, groupItems, emojiIndexMap);
-        }
-    }
-}
 function _renderStickerTab(list, itemsToRender) {
     const disabledSet = _getDisabledStickerItemsSet();
     itemsToRender.forEach((item, index) => {
@@ -1199,221 +861,6 @@ function _renderStickerTab(list, itemsToRender) {
         list.appendChild(div);
     });
 }
-
-// 简单的贴纸列表（无分组）
-function _renderSimpleStickerList(list, stickers) {
-    list.innerHTML = '';
-    const disabledSet = _getDisabledStickerItemsSet();
-    stickers.forEach((item, index) => {
-        const div = document.createElement('div');
-        const isDisabled = disabledSet.has(item);
-        div.className = `sticker-item${isDisabled ? ' sticker-disabled' : ''}`;
-        div.innerHTML = `
-            <img src="${item}" loading="lazy">
-            <div class="sticker-delete-btn"><i class="fas fa-times"></i></div>
-        `;
-        div.querySelector('.sticker-delete-btn').addEventListener('click', e => {
-            e.stopPropagation();
-            if (confirm('删除此表情？')) {
-                if (isDisabled) disabledSet.delete(item);
-                stickerLibrary.splice(index, 1);
-                _saveDisabledStickerItemsSet(disabledSet);
-                throttledSaveData();
-                renderReplyLibrary();
-            }
-        });
-        list.appendChild(div);
-    });
-}
-
-// 贴纸分组渲染主函数
-// 贴纸分组渲染主函数（支持批量）
-// 贴纸分组渲染主函数（支持筛选平铺）
-// 贴纸分组渲染主函数（支持筛选平铺）
-function _renderStickerWithGroups(list, stickers) {
-    // 如果没有分组，简单列表
-    if (!customStickerGroups || customStickerGroups.length === 0) {
-        _renderSimpleStickerList(list, stickers);
-        return;
-    }
-
-    // 构建全局索引 Map
-    const stickerIndexMap = new Map();
-    stickers.forEach((s, i) => stickerIndexMap.set(s, i));
-
-    if (_activeGroupFilter === null || _activeGroupFilter === 'all') {
-        // 全部模式：平铺显示所有贴纸
-        if (stickers.length === 0) {
-            list.innerHTML = renderEmptyState('暂无贴纸');
-        } else {
-            _renderSimpleStickerListWithBatch(list, stickers, stickerIndexMap);
-        }
-    }
-    else if (_activeGroupFilter === 'ungrouped') {
-        // 未分组模式：平铺显示未分组的贴纸
-        const groupedSet = new Set();
-        customStickerGroups.forEach(g => {
-            (g.items || []).forEach(s => groupedSet.add(s));
-        });
-        const ungrouped = stickers.filter(s => !groupedSet.has(s));
-        if (ungrouped.length === 0) {
-            list.innerHTML = renderEmptyState('所有贴纸均已分组');
-        } else {
-            _renderSimpleStickerListWithBatch(list, ungrouped, stickerIndexMap);
-        }
-    }
-    else {
-        // 具体分组模式：平铺显示该分组内的贴纸
-        const targetGroup = customStickerGroups.find(g => g.id === _activeGroupFilter);
-        if (!targetGroup) {
-            list.innerHTML = renderEmptyState('分组不存在');
-            return;
-        }
-        const groupItems = (targetGroup.items || []).filter(s => stickers.includes(s));
-        if (groupItems.length === 0) {
-            list.innerHTML = renderEmptyState('此分组暂无内容');
-        } else {
-            _renderSimpleStickerListWithBatch(list, groupItems, stickerIndexMap);
-        }
-    }
-}
-// 平铺显示贴纸（支持批量模式，不带分组栏）
-function _renderSimpleStickerListWithBatch(list, stickers, stickerIndexMap) {
-    list.innerHTML = '';
-    if (stickers.length === 0) {
-        list.innerHTML = renderEmptyState('暂无内容');
-        return;
-    }
-    list.style.display = 'grid';
-    list.style.gridTemplateColumns = 'repeat(auto-fill, minmax(70px, auto))';
-    list.style.gap = '8px';
-    list.style.padding = '8px';
-
-    const disabledSet = _getDisabledStickerItemsSet();
-    stickers.forEach(sticker => {
-        const isItemDisabled = disabledSet.has(sticker);
-        const stickerDiv = document.createElement('div');
-        stickerDiv.className = `sticker-item${isItemDisabled ? ' sticker-disabled' : ''}`;
-        if (_batchModeActive) {
-            const idx = stickerIndexMap.get(sticker);
-            const isSelected = idx !== undefined && _batchSelectedIndices.has(idx);
-            stickerDiv.style.position = 'relative';
-            stickerDiv.style.cursor = 'pointer';
-            stickerDiv.style.border = isSelected ? '2px solid var(--accent-color)' : 'none';
-            stickerDiv.style.backgroundColor = isSelected ? 'rgba(var(--accent-color-rgb), 0.1)' : '';
-            stickerDiv.onclick = (e) => {
-                if (e.target.closest('.sticker-delete-btn')) return;
-                e.stopPropagation();
-                if (idx !== undefined) {
-                    if (_batchSelectedIndices.has(idx)) _batchSelectedIndices.delete(idx);
-                    else _batchSelectedIndices.add(idx);
-                    renderReplyLibrary();
-                }
-            };
-        }
-        stickerDiv.innerHTML = `
-            <img src="${sticker}" loading="lazy">
-            <div class="sticker-delete-btn"><i class="fas fa-times"></i></div>
-        `;
-        stickerDiv.querySelector('.sticker-delete-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (confirm('删除此表情？')) {
-                const globalIndex = stickerLibrary.indexOf(sticker);
-                if (globalIndex !== -1) {
-                    if (isItemDisabled) disabledSet.delete(sticker);
-                    stickerLibrary.splice(globalIndex, 1);
-                    _saveDisabledStickerItemsSet(disabledSet);
-                    _batchSelectedIndices.clear();
-                    throttledSaveData();
-                    renderReplyLibrary();
-                }
-            }
-        });
-        list.appendChild(stickerDiv);
-    });
-}
-
-function _renderStickerGroupBlock(list, group, items, disabledSet, isUngrouped = false) {
-    const section = document.createElement('div');
-    section.className = 'rl-group-block';
-    const isCollapsed = group._collapsed || false;
-    const isDisabled = group.disabled;
-    const colorDot = group.color || '#868E96';
-
-    section.innerHTML = `
-        <div class="rl-group-header${isCollapsed ? ' collapsed' : ''}" style="${isDisabled ? 'opacity:0.5;' : ''}">
-            <div class="rl-group-tag" title="${isDisabled ? '点击启用此分组' : '点击屏蔽此分组'}">
-                <span style="width:8px;height:8px;border-radius:50%;background:${colorDot};flex-shrink:0;"></span>
-                <span style="font-size:12px;font-weight:700;color:${colorDot};">${group.name}</span>
-                ${isDisabled ? `<span title="已屏蔽" style="color:${colorDot};">${ICONS.eyeOff}</span>` : ''}
-            </div>
-            <span style="font-size:11px;color:var(--text-secondary);">${items.length} 个</span>
-            <div style="flex:1;"></div>
-            ${!isUngrouped ? `<button class="grp-edit-btn" style="width:26px;height:26px;border-radius:8px;border:1px solid var(--border-color);background:var(--primary-bg);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;">✎</button>` : ''}
-            <div class="grp-chevron" style="transform:${isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)'};">▼</div>
-        </div>
-        <div class="rl-group-body" style="display:${isCollapsed ? 'none' : 'block'};"></div>
-    `;
-    list.appendChild(section);
-
-    const body = section.querySelector('.rl-group-body');
-    body.style.display = 'grid';
-    body.style.gridTemplateColumns = 'repeat(auto-fill, minmax(70px, auto))';
-    body.style.gap = '8px';
-    body.style.padding = '8px';
-
-    items.forEach((sticker) => {
-        const isItemDisabled = disabledSet.has(sticker);
-        const stickerDiv = document.createElement('div');
-        stickerDiv.className = `sticker-item${isItemDisabled ? ' sticker-disabled' : ''}`;
-        stickerDiv.innerHTML = `
-            <img src="${sticker}" loading="lazy">
-            <div class="sticker-delete-btn"><i class="fas fa-times"></i></div>
-        `;
-        stickerDiv.querySelector('.sticker-delete-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (confirm('删除此表情？')) {
-                const globalIndex = stickerLibrary.indexOf(sticker);
-                if (globalIndex !== -1) {
-                    if (isItemDisabled) disabledSet.delete(sticker);
-                    stickerLibrary.splice(globalIndex, 1);
-                    _saveDisabledStickerItemsSet(disabledSet);
-                    throttledSaveData();
-                    renderReplyLibrary();
-                }
-            }
-        });
-        body.appendChild(stickerDiv);
-    });
-
-    const header = section.querySelector('.rl-group-header');
-    header.addEventListener('click', (e) => {
-        if (e.target.closest('.grp-edit-btn') || e.target.closest('.rl-group-tag')) return;
-        group._collapsed = !group._collapsed;
-        body.style.display = group._collapsed ? 'none' : 'block';
-        section.querySelector('.grp-chevron').style.transform = group._collapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
-    });
-
-    const tag = section.querySelector('.rl-group-tag');
-    if (tag && !isUngrouped) {
-        tag.addEventListener('click', (e) => {
-            e.stopPropagation();
-            group.disabled = !group.disabled;
-            throttledSaveData();
-            renderReplyLibrary();
-            showNotification(group.disabled ? `已屏蔽「${group.name}」` : `已启用「${group.name}」`, 'success');
-        });
-    }
-
-    const editBtn = section.querySelector('.grp-edit-btn');
-    if (editBtn) {
-        editBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            _showGroupEditor(group, 'sticker');
-        });
-    }
-}
-
 function _getDisabledItemsSet() {
     try {
         const raw = localStorage.getItem('disabledReplyItems');
@@ -1501,77 +948,24 @@ function _runDedup() {
 }
 
 function _showGroupManager() {
-    let targetGroups;
-    let targetType;
-    if (currentSubTab === 'emojis') {
-        targetGroups = customEmojiGroups;
-        targetType = 'emoji';
-    } else if (currentSubTab === 'stickers') {
-        targetGroups = customStickerGroups;
-        targetType = 'sticker';
-    } else {
-        targetGroups = customReplyGroups;
-        targetType = 'reply';
-    }
-    if (!targetGroups) targetGroups = [];
-
     const overlay = _makeOverlay();
-    const panel = document.createElement('div');
-    panel.style.cssText = `
-        background:var(--secondary-bg);border-radius:22px;padding:24px;
-        width:92%;max-width:400px;max-height:85vh;
-        display:flex;flex-direction:column;gap:14px;
-        box-shadow:0 24px 80px rgba(0,0,0,.45);
-        animation:popIn 0.22s cubic-bezier(.34,1.56,.64,1);
-    `;
-    panel.innerHTML = `
-        <style>@keyframes popIn { from{opacity:0;transform:scale(.93)} to{opacity:1;transform:scale(1)} }</style>
-        <div style="display:flex;align-items:center;justify-content:space-between;">
-            <div style="font-size:16px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
-                ${ICONS.folder} 分组管理 (${targetType === 'emoji' ? 'Emoji' : targetType === 'sticker' ? '贴纸' : '字卡'})
-            </div>
-            <button id="gm-close" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--primary-bg);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;">${ICONS.close}</button>
-        </div>
-        <div id="gm-list" style="display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:55vh;"></div>
-        <button id="gm-add" style="
-            width:100%;padding:12px;border:1.5px dashed var(--accent-color);border-radius:13px;
-            background:transparent;color:var(--accent-color);font-size:13px;cursor:pointer;
-            font-family:var(--font-family);display:flex;align-items:center;justify-content:center;gap:7px;
-            transition:background 0.15s;
-        " onmouseover="this.style.background='rgba(var(--accent-color-rgb),0.06)'" onmouseout="this.style.background='transparent'">
-            ${ICONS.plus} 新建分组
-        </button>
-    `;
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
 
     const render = () => {
-        const noGroups = targetGroups.length === 0;
-        const listDiv = panel.querySelector('#gm-list');
-        listDiv.innerHTML = noGroups
+        const noGroups = !customReplyGroups || customReplyGroups.length === 0;
+        panel.querySelector('#gm-list').innerHTML = noGroups
             ? `<div style="text-align:center;padding:32px 0;color:var(--text-secondary);font-size:13px;opacity:0.7;">
                     还没有分组<br><span style="font-size:11px;">点击下方按钮创建第一个分组</span>
                </div>`
-            : targetGroups.map((g, i) => {
-                let itemCount = 0;
-                if (targetType === 'emoji') {
-                    const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-                    itemCount = (g.items || []).filter(t => allEmojis.includes(t)).length;
-                } else if (targetType === 'sticker') {
-                    itemCount = (g.items || []).filter(t => stickerLibrary.includes(t)).length;
-                } else {
-                    itemCount = (g.items || []).filter(t => customReplies.includes(t)).length;
-                }
-                return `
+            : customReplyGroups.map((g, i) => `
                 <div style="
                     display:flex;align-items:center;gap:10px;padding:12px 14px;
                     border-radius:13px;border:1.5px solid var(--border-color);
                     background:var(--primary-bg);${g.disabled ? 'opacity:0.55;' : ''}
                     transition:all 0.15s;
                 ">
-                    <span style="width:12px;height:12px;border-radius:50%;background:${g.color || '#868E96'};flex-shrink:0;box-shadow:0 0 0 2px ${g.color || '#868E96'}30;"></span>
+                    <span style="width:12px;height:12px;border-radius:50%;background:${g.color||'#868E96'};flex-shrink:0;box-shadow:0 0 0 2px ${g.color||'#868E96'}30;"></span>
                     <span style="flex:1;font-size:13px;color:var(--text-primary);font-weight:600;">${g.name}</span>
-                    <span style="font-size:11px;color:var(--text-secondary);">${itemCount} 条</span>
+                    <span style="font-size:11px;color:var(--text-secondary);">${(g.items||[]).filter(t=>customReplies.includes(t)).length} 条</span>
                     <button data-action="toggle" data-i="${i}" style="
                         width:28px;height:28px;border-radius:8px;border:1px solid var(--border-color);
                         background:${g.disabled ? 'var(--accent-color)' : 'transparent'};
@@ -1589,39 +983,67 @@ function _showGroupManager() {
                         display:flex;align-items:center;justify-content:center;
                     " title="删除">${ICONS.trash}</button>
                 </div>
-            `}).join('');
-        listDiv.querySelectorAll('[data-action]').forEach(btn => {
+            `).join('');
+
+        panel.querySelectorAll('[data-action]').forEach(btn => {
             btn.onclick = () => {
                 const i = parseInt(btn.dataset.i);
                 const action = btn.dataset.action;
                 if (action === 'toggle') {
-                    targetGroups[i].disabled = !targetGroups[i].disabled;
+                    customReplyGroups[i].disabled = !customReplyGroups[i].disabled;
                     throttledSaveData(); render(); renderReplyLibrary();
                 } else if (action === 'edit') {
                     overlay.remove();
-                    _showGroupEditor(targetGroups[i], targetType);
+                    _showGroupEditor(customReplyGroups[i]);
                 } else if (action === 'del') {
-                    if (confirm(`删除分组「${targetGroups[i].name}」？（内容不会被删除）`)) {
-                        targetGroups.splice(i, 1);
+                    if (confirm(`删除分组「${customReplyGroups[i].name}」？（字卡不会被删除）`)) {
+                        customReplyGroups.splice(i, 1);
                         throttledSaveData(); render(); renderReplyLibrary();
                     }
                 }
             };
         });
     };
+
+    const panel = document.createElement('div');
+    panel.style.cssText = `
+        background:var(--secondary-bg);border-radius:22px;padding:24px;
+        width:92%;max-width:400px;max-height:85vh;
+        display:flex;flex-direction:column;gap:14px;
+        box-shadow:0 24px 80px rgba(0,0,0,.45);
+        animation:popIn 0.22s cubic-bezier(.34,1.56,.64,1);
+    `;
+    panel.innerHTML = `
+        <style>
+            @keyframes popIn { from{opacity:0;transform:scale(.93)} to{opacity:1;transform:scale(1)} }
+        </style>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+            <div style="font-size:16px;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+                ${ICONS.folder} 分组管理
+            </div>
+            <button id="gm-close" style="width:30px;height:30px;border-radius:50%;border:none;background:var(--primary-bg);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;">${ICONS.close}</button>
+        </div>
+        <div id="gm-list" style="display:flex;flex-direction:column;gap:8px;overflow-y:auto;max-height:55vh;"></div>
+        <button id="gm-add" style="
+            width:100%;padding:12px;border:1.5px dashed var(--accent-color);border-radius:13px;
+            background:transparent;color:var(--accent-color);font-size:13px;cursor:pointer;
+            font-family:var(--font-family);display:flex;align-items:center;justify-content:center;gap:7px;
+            transition:background 0.15s;
+        " onmouseover="this.style.background='rgba(var(--accent-color-rgb),0.06)'" onmouseout="this.style.background='transparent'">
+            ${ICONS.plus} 新建分组
+        </button>
+    `;
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
     render();
 
     panel.querySelector('#gm-close').onclick = () => overlay.remove();
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-    panel.querySelector('#gm-add').onclick = () => { overlay.remove(); _showGroupEditor(null, targetType); };
+    panel.querySelector('#gm-add').onclick = () => { overlay.remove(); _showGroupEditor(null); };
 }
-function _showGroupEditor(group, type = 'reply') {
-    const isNew = !group;
-    let targetGroups;
-    if (type === 'emoji') targetGroups = customEmojiGroups;
-    else if (type === 'sticker') targetGroups = customStickerGroups;
-    else targetGroups = customReplyGroups;
 
+function _showGroupEditor(group) {
+    const isNew = !group;
     const overlay = _makeOverlay();
     const initColor = group?.color || GROUP_COLORS[Math.floor(Math.random() * GROUP_COLORS.length)];
     let selectedColor = initColor;
@@ -1744,7 +1166,8 @@ function _showGroupEditor(group, type = 'reply') {
         const name = panel.querySelector('#ge-name').value.trim();
         if (!name) { showNotification('请输入分组名称', 'warning'); return; }
         if (isNew) {
-            targetGroups.push({ id: Date.now(), name, color: selectedColor, disabled: false, items: [] });
+            if (!window.customReplyGroups) window.customReplyGroups = [];
+            customReplyGroups.push({ id: Date.now(), name, color: selectedColor, disabled: false, items: [] });
         } else {
             group.name = name;
             group.color = selectedColor;
@@ -1755,6 +1178,7 @@ function _showGroupEditor(group, type = 'reply') {
         showNotification(isNew ? '✓ 分组已创建' : '✓ 分组已更新', 'success');
     };
 }
+
 function _showSingleItemGroupPicker(itemText) {
     if (!customReplyGroups || customReplyGroups.length === 0) {
         if (confirm('还没有分组，是否立即创建？')) _showGroupEditor(null);
@@ -1875,161 +1299,6 @@ function _showBatchGroupPicker() {
     };
 }
 
-// Emoji 批量分组选择器
-function _showBatchGroupPickerForEmoji() {
-    if (!customEmojiGroups || customEmojiGroups.length === 0) {
-        if (confirm('还没有 Emoji 分组，是否立即创建？')) { _showGroupEditor(null, 'emoji'); return; }
-        return;
-    }
-    const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-    const uniqueEmojis = [...new Set(allEmojis)];
-    const selectedItems = [..._batchSelectedIndices].map(i => uniqueEmojis[i]).filter(Boolean);
-    if (selectedItems.length === 0) return;
-
-    const overlay = _makeOverlay();
-    const panel = document.createElement('div');
-    panel.style.cssText = `
-        background:var(--secondary-bg);border-radius:22px;padding:22px;
-        width:92%;max-width:340px;
-        box-shadow:0 24px 80px rgba(0,0,0,.45);
-        animation:popIn 0.22s cubic-bezier(.34,1.56,.64,1);
-    `;
-    panel.innerHTML = `
-        <style>@keyframes popIn { from{opacity:0;transform:scale(.93)} to{opacity:1;transform:scale(1)} }</style>
-        <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">批量分组 (Emoji)</div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;">将 <strong style="color:var(--text-primary);">${selectedItems.length}</strong> 个 Emoji 移入分组</div>
-        <div style="display:flex;flex-direction:column;gap:7px;max-height:50vh;overflow-y:auto;margin-bottom:14px;">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border-radius:11px;border:1.5px solid var(--border-color);background:var(--primary-bg);">
-                <input type="radio" name="bgp" value="" checked style="accent-color:var(--accent-color);">
-                <span style="font-size:13px;color:var(--text-secondary);">移出所有分组</span>
-            </label>
-            ${customEmojiGroups.map((g, i) => `
-                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border-radius:11px;border:1.5px solid var(--border-color);background:var(--primary-bg);">
-                    <input type="radio" name="bgp" value="${i}" style="accent-color:${g.color};">
-                    <span style="width:9px;height:9px;border-radius:50%;background:${g.color || '#aaa'};flex-shrink:0;"></span>
-                    <span style="flex:1;font-size:13px;color:var(--text-primary);font-weight:600;">${g.name}</span>
-                    <span style="font-size:11px;color:var(--text-secondary);">${(g.items || []).length} 个</span>
-                </label>
-            `).join('')}
-        </div>
-        <div style="display:flex;gap:10px;">
-            <button id="bgp-cancel" style="flex:1;padding:11px;border:1.5px solid var(--border-color);border-radius:12px;background:none;color:var(--text-secondary);font-size:13px;cursor:pointer;font-family:var(--font-family);">取消</button>
-            <button id="bgp-save" style="flex:2;padding:11px;border:none;border-radius:12px;background:var(--accent-color);color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font-family);">确认</button>
-        </div>
-    `;
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-
-    panel.querySelector('#bgp-cancel').onclick = () => overlay.remove();
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-    panel.querySelector('#bgp-save').onclick = () => {
-        const checked = panel.querySelector('input[name="bgp"]:checked');
-        if (!checked) return;
-        customEmojiGroups.forEach(g => { if (g.items) g.items = g.items.filter(e => !selectedItems.includes(e)); });
-        if (checked.value !== '') {
-            const idx = parseInt(checked.value);
-            if (!customEmojiGroups[idx].items) customEmojiGroups[idx].items = [];
-            selectedItems.forEach(e => {
-                if (!customEmojiGroups[idx].items.includes(e)) customEmojiGroups[idx].items.push(e);
-            });
-        }
-        throttledSaveData();
-        _batchSelectedIndices.clear();
-        overlay.remove();
-        renderReplyLibrary();
-        showNotification(`✓ 已为 ${selectedItems.length} 个 Emoji 分组`, 'success');
-    };
-}
-
-// 贴纸批量分组选择器
-function _showBatchGroupPickerForSticker() {
-    if (!customStickerGroups || customStickerGroups.length === 0) {
-        if (confirm('还没有贴纸分组，是否立即创建？')) { _showGroupEditor(null, 'sticker'); return; }
-        return;
-    }
-    const selectedItems = [..._batchSelectedIndices].map(i => stickerLibrary[i]).filter(Boolean);
-    if (selectedItems.length === 0) return;
-
-    const overlay = _makeOverlay();
-    const panel = document.createElement('div');
-    panel.style.cssText = `
-        background:var(--secondary-bg);border-radius:22px;padding:22px;
-        width:92%;max-width:340px;
-        box-shadow:0 24px 80px rgba(0,0,0,.45);
-        animation:popIn 0.22s cubic-bezier(.34,1.56,.64,1);
-    `;
-    panel.innerHTML = `
-        <style>@keyframes popIn { from{opacity:0;transform:scale(.93)} to{opacity:1;transform:scale(1)} }</style>
-        <div style="font-size:15px;font-weight:700;color:var(--text-primary);margin-bottom:4px;">批量分组 (贴纸)</div>
-        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:14px;">将 <strong style="color:var(--text-primary);">${selectedItems.length}</strong> 个贴纸移入分组</div>
-        <div style="display:flex;flex-direction:column;gap:7px;max-height:50vh;overflow-y:auto;margin-bottom:14px;">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border-radius:11px;border:1.5px solid var(--border-color);background:var(--primary-bg);">
-                <input type="radio" name="bgp" value="" checked style="accent-color:var(--accent-color);">
-                <span style="font-size:13px;color:var(--text-secondary);">移出所有分组</span>
-            </label>
-            ${customStickerGroups.map((g, i) => `
-                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:10px 12px;border-radius:11px;border:1.5px solid var(--border-color);background:var(--primary-bg);">
-                    <input type="radio" name="bgp" value="${i}" style="accent-color:${g.color};">
-                    <span style="width:9px;height:9px;border-radius:50%;background:${g.color || '#aaa'};flex-shrink:0;"></span>
-                    <span style="flex:1;font-size:13px;color:var(--text-primary);font-weight:600;">${g.name}</span>
-                    <span style="font-size:11px;color:var(--text-secondary);">${(g.items || []).length} 个</span>
-                </label>
-            `).join('')}
-        </div>
-        <div style="display:flex;gap:10px;">
-            <button id="bgp-cancel" style="flex:1;padding:11px;border:1.5px solid var(--border-color);border-radius:12px;background:none;color:var(--text-secondary);font-size:13px;cursor:pointer;font-family:var(--font-family);">取消</button>
-            <button id="bgp-save" style="flex:2;padding:11px;border:none;border-radius:12px;background:var(--accent-color);color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:var(--font-family);">确认</button>
-        </div>
-    `;
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-
-    panel.querySelector('#bgp-cancel').onclick = () => overlay.remove();
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-    panel.querySelector('#bgp-save').onclick = () => {
-        const checked = panel.querySelector('input[name="bgp"]:checked');
-        if (!checked) return;
-        customStickerGroups.forEach(g => { if (g.items) g.items = g.items.filter(s => !selectedItems.includes(s)); });
-        if (checked.value !== '') {
-            const idx = parseInt(checked.value);
-            if (!customStickerGroups[idx].items) customStickerGroups[idx].items = [];
-            selectedItems.forEach(s => {
-                if (!customStickerGroups[idx].items.includes(s)) customStickerGroups[idx].items.push(s);
-            });
-        }
-        throttledSaveData();
-        _batchSelectedIndices.clear();
-        overlay.remove();
-        renderReplyLibrary();
-        showNotification(`✓ 已为 ${selectedItems.length} 个贴纸分组`, 'success');
-    };
-}
-
-// Emoji 批量屏蔽（启用/禁用）
-function _batchToggleDisableEmoji() {
-    let disabledEmojiSet = new Set();
-    try {
-        const raw = localStorage.getItem('disabledEmojiItems');
-        if (raw) disabledEmojiSet = new Set(JSON.parse(raw));
-    } catch (e) { }
-
-    const allEmojis = [...CONSTANTS.REPLY_EMOJIS, ...customEmojis];
-    const uniqueEmojis = [...new Set(allEmojis)];
-    const selectedItems = [..._batchSelectedIndices].map(i => uniqueEmojis[i]).filter(Boolean);
-    if (selectedItems.length === 0) return;
-
-    const allDisabled = selectedItems.every(item => disabledEmojiSet.has(item));
-    if (allDisabled) {
-        selectedItems.forEach(item => disabledEmojiSet.delete(item));
-        showNotification(`已启用 ${selectedItems.length} 个 Emoji`, 'success');
-    } else {
-        selectedItems.forEach(item => disabledEmojiSet.add(item));
-        showNotification(`已屏蔽 ${selectedItems.length} 个 Emoji`, 'info');
-    }
-    localStorage.setItem('disabledEmojiItems', JSON.stringify([...disabledEmojiSet]));
-    _batchSelectedIndices.clear();
-    renderReplyLibrary();
-}
 function deleteItem(index) {
     if (!confirm('确定删除吗？')) return;
     const item = (currentMajorTab === 'reply' && currentSubTab === 'custom') ? customReplies[index] : null;
