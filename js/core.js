@@ -307,7 +307,11 @@ const loadData = async () => {
             localforage.getItem(getStorageKey('showPartnerNameInChat')),
             localforage.getItem(`${APP_PREFIX}themeSchemes`),
             localforage.getItem(getStorageKey('myStickerLibrary')),
-            localforage.getItem(getStorageKey('customReplyGroups'))
+            localforage.getItem(getStorageKey('customReplyGroups')),
+            localforage.getItem(getStorageKey('customEmojiGroups')),
+            localforage.getItem(getStorageKey('customStickerGroups')),
+        localforage.getItem(getStorageKey('customEmojiGroups')),   // 新增
+            localforage.getItem(getStorageKey('customStickerGroups'))  // 新增
         ]);
         const getVal = (index) => results[index].status === 'fulfilled' ? results[index].value : null;
 
@@ -330,6 +334,32 @@ const loadData = async () => {
         const savedThemeSchemes = getVal(16);
         const savedMyStickers = getVal(17);
         const savedReplyGroups = getVal(18);
+        // 从 IndexedDB 读取分组数据
+        const savedEmojiGroups = getVal(19);
+        const savedStickerGroups = getVal(20);
+
+        // 强制赋值：如果读取到数据就用读取的，否则保持空数组
+        if (savedEmojiGroups && Array.isArray(savedEmojiGroups)) {
+            window.customEmojiGroups = savedEmojiGroups;
+        } else {
+            window.customEmojiGroups = window.customEmojiGroups || [];
+        }
+
+        if (savedStickerGroups && Array.isArray(savedStickerGroups)) {
+            window.customStickerGroups = savedStickerGroups;
+        } else {
+            window.customStickerGroups = window.customStickerGroups || [];
+        }
+
+        if (results[19] && results[19].status === 'fulfilled' && results[19].value) {
+            customEmojiGroups = results[19].value;
+        }
+        if (results[20] && results[20].status === 'fulfilled' && results[20].value) {
+            customStickerGroups = results[20].value;
+        }
+
+        console.log('✅ 加载后的 Emoji 分组:', window.customEmojiGroups);
+        console.log('✅ 加载后的贴纸分组:', window.customStickerGroups);
 
         if (savedPartnerPersonas) partnerPersonas = savedPartnerPersonas;
 
@@ -576,7 +606,9 @@ const saveData = async () => {
         { key: 'myStickerLibrary',       val: () => localforage.setItem(getStorageKey('myStickerLibrary'), myStickerLibrary) },
         { key: 'customThemes',           val: () => localforage.setItem(`${APP_PREFIX}customThemes`, customThemes) },
         { key: 'themeSchemes',           val: () => localforage.setItem(`${APP_PREFIX}themeSchemes`, themeSchemes) },
-        { key: 'chatMessages',           val: () => localforage.setItem(getStorageKey('chatMessages'), messages) },
+        { key: 'chatMessages', val: () => localforage.setItem(getStorageKey('chatMessages'), messages) },
+        { key: 'customEmojiGroups', val: () => localforage.setItem(getStorageKey('customEmojiGroups'), window.customEmojiGroups || []) },
+        { key: 'customStickerGroups', val: () => localforage.setItem(getStorageKey('customStickerGroups'), window.customStickerGroups || []) },
     ];
 
     const partnerAvatarSrc = (() => {
@@ -625,6 +657,10 @@ const saveData = async () => {
     if (typeof window.markLocalBackupUpdated === 'function') {
         window.markLocalBackupUpdated('local-save');
     }
+
+    // 在其他 setItem 之后添加
+    await localforage.setItem(getStorageKey('customEmojiGroups'), customEmojiGroups);
+    await localforage.setItem(getStorageKey('customStickerGroups'), customStickerGroups);
 };
 
         function initializeRandomUI() {

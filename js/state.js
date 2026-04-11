@@ -26,6 +26,9 @@
         let isBatchFavoriteMode = false;
         let selectedMessages = [];
         let customReplies = [];
+        let customEmojiGroups = [];      // 存储 Emoji 的分组
+        let customStickerGroups = [];    // 存储贴纸的分组
+        let customEmojiDisabled = new Set(); // 被屏蔽的 Emoji 集合（可选，如果需要屏蔽单个 Emoji）
         let customPokes = [];
         let customStatuses = [];
         let customMottos = [];
