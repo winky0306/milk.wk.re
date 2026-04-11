@@ -2355,7 +2355,7 @@ function handleSnapshotSelection(messageId) {
 }
 
 // 生成聊天截图
-// 生成聊天截图（支持群聊成员头像和名字）
+// 生成聊天截图（修复群聊成员头像和名字显示）
 async function generateMessagesSnapshot() {
     if (selectedSnapshotMessages.length === 0) {
         showNotification('请至少选择一条消息', 'warning');
@@ -2396,9 +2396,9 @@ async function generateMessagesSnapshot() {
     header.innerHTML = `📸 聊天截图 · ${new Date().toLocaleString()}`;
     container.appendChild(header);
 
-    // 获取群聊相关状态和函数（如果存在）
-    const isGroupMode = window.groupChatEnabled === true;
-    const showGroupName = window.groupChatShowName === true;
+    // 修复：正确获取群聊状态（使用全局 groupChatSettings 变量）
+    const isGroupMode = typeof window.groupChatSettings !== 'undefined' && window.groupChatSettings.enabled === true;
+    const showGroupName = isGroupMode && window.groupChatSettings.showName === true;
     const getGroupMember = (typeof window.getGroupMemberForMessage === 'function')
         ? window.getGroupMemberForMessage
         : null;
@@ -2453,9 +2453,11 @@ async function generateMessagesSnapshot() {
         if (member && member.avatar) {
             avatarSrc = member.avatar;
         } else if (isUser) {
-            avatarSrc = DOMElements.me.avatar.querySelector('img')?.src || null;
+            const myImg = DOMElements.me.avatar.querySelector('img');
+            avatarSrc = myImg ? myImg.src : null;
         } else if (!member) {
-            avatarSrc = DOMElements.partner.avatar.querySelector('img')?.src || null;
+            const partnerImg = DOMElements.partner.avatar.querySelector('img');
+            avatarSrc = partnerImg ? partnerImg.src : null;
         }
 
         if (avatarSrc) {
@@ -2478,7 +2480,7 @@ async function generateMessagesSnapshot() {
             word-break: break-word;
         `;
 
-        // 如果群聊模式开启且需要显示成员名字，且该消息属于群成员，则添加名字标签
+        // 群聊模式显示成员名字（如果开启）
         if (isGroupMode && showGroupName && member) {
             const nameLabel = document.createElement('div');
             nameLabel.className = 'snapshot-group-name';
@@ -2491,8 +2493,9 @@ async function generateMessagesSnapshot() {
             `;
             nameLabel.textContent = member.name || '成员';
             bubbleDiv.appendChild(nameLabel);
-        } else if (!isUser && !member && (settings.showPartnerNameInChat || showPartnerNameInChat)) {
-            // 单人模式显示对方名字（如果开启）
+        }
+        // 单人模式且开启“显示对方名字”
+        else if (!isGroupMode && !isUser && (settings.showPartnerNameInChat || showPartnerNameInChat)) {
             const nameLabel = document.createElement('div');
             nameLabel.className = 'snapshot-group-name';
             nameLabel.style.cssText = `
