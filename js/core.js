@@ -929,6 +929,20 @@ function manageAutoEnvelopeTimer() {
                     el.classList.toggle('active', val);
                 }
             }
+            // 同步主动写信设置 UI（梦角主动寄信）
+            const autoEnvelopeToggle = document.getElementById('auto-envelope-toggle');
+            const autoEnvelopeControl = document.getElementById('auto-envelope-control');
+            const autoEnvelopeSlider = document.getElementById('auto-envelope-slider');
+            const autoEnvelopeValue = document.getElementById('auto-envelope-value');
+            if (autoEnvelopeToggle) {
+                autoEnvelopeToggle.classList.toggle('active', !!settings.autoEnvelopeEnabled);
+                if (autoEnvelopeControl) autoEnvelopeControl.style.display = settings.autoEnvelopeEnabled ? "flex" : "none";
+            }
+            if (autoEnvelopeSlider) {
+                const currentVal = settings.autoEnvelopeInterval || 5;
+                autoEnvelopeSlider.value = currentVal;
+                if (autoEnvelopeValue) autoEnvelopeValue.textContent = `${currentVal}小时`;
+            }
             const _immToggle = document.getElementById('immersive-toggle');
             if (_immToggle) _immToggle.classList.toggle('active', document.body.classList.contains('immersive-mode'));
 
