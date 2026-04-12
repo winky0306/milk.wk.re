@@ -43,9 +43,18 @@
         +       '<div class="dm-tile-icon teal"><i class="fas fa-comments"></i></div>'
         +       '<div class="dm-tile-info"><div class="dm-tile-title">聊天记录</div><div class="dm-tile-desc">消息内容单独备份</div></div>'
         +       '<i class="fas fa-chevron-right dm-tile-arrow"></i>'
-        +     '</div>'
+        + '</div>'
+     
         +   '</div>'
-
+        // 在备份与恢复区块之后插入
+        + '<div class="dm-section-label"><i class="fas fa-compress-alt"></i> 工具</div>'
+        + '<div class="dm-grid">'
+        + '<div class="dm-tile" id="dm-tile-compress-stickers">'
+        + '<div class="dm-tile-icon amber"><i class="fas fa-image"></i></div>'
+        + '<div class="dm-tile-info"><div class="dm-tile-title">贴图压缩</div><div class="dm-tile-desc">将表情库图片压缩到15KB以内</div></div>'
+        + '<i class="fas fa-chevron-right dm-tile-arrow"></i>'
+        + '</div>'
+        + '</div>'
         +   '<div style="display:none">'
         +     '<button id="export-all-settings"></button>'
         +     '<button id="import-all-settings"></button>'
@@ -176,6 +185,7 @@
         +     '<button class="dm-drawer-cancel" id="dm-drawer-chat-cancel">取消</button>'
         +   '</div>'
         + '</div>';
+
 
     function isCorrect(mc) {
         return mc.querySelector('.dm-topbar') !== null
@@ -498,6 +508,12 @@
                 } else { startTour(); }
             }
         });
+        var compressTile = mc.querySelector('#dm-tile-compress-stickers');
+        if (compressTile) {
+            compressTile.addEventListener('click', function () {
+                openCompressStickersModal();  // 直接调用，不再打开独立模态框
+            });
+        }
     }
 
     function onModalOpen(modal) {
@@ -544,6 +560,12 @@
                 }
             });
             _contentObserver.observe(mc, { childList: true, subtree: false });
+        }
+        // 确保压缩模态框存在于 body 中
+        if (!document.getElementById('compress-stickers-modal')) {
+            var div = document.createElement('div');
+            div.innerHTML = COMPRESS_MODAL_HTML;
+            document.body.appendChild(div.firstElementChild);
         }
     }
 
@@ -915,3 +937,265 @@ document.addEventListener('DOMContentLoaded', function() {
     `;
     document.head.appendChild(style);
 })();
+// ======================= 贴图压缩功能 =======================
+async function compressImageToTarget(base64, targetKB = 15, minQuality = 0.05, maxWidth = 400) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => {
+            let width = img.width;
+            let height = img.height;
+            if (width > maxWidth) {
+                height = height * (maxWidth / width);
+                width = maxWidth;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            let quality = 0.9;
+            let result = canvas.toDataURL('image/jpeg', quality);
+            let sizeKB = Math.ceil((result.length * 0.75) / 1024);
+
+            if (sizeKB <= targetKB) {
+                resolve(result);
+                return;
+            }
+
+            // 二分查找合适的 quality
+            let low = 0.1, high = 0.9;
+            for (let i = 0; i < 10; i++) {
+                quality = (low + high) / 2;
+                result = canvas.toDataURL('image/jpeg', quality);
+                sizeKB = Math.ceil((result.length * 0.75) / 1024);
+                if (sizeKB > targetKB) {
+                    high = quality;
+                } else {
+                    low = quality;
+                    if (sizeKB >= targetKB * 0.85) break;
+                }
+            }
+            // 如果仍然太大，缩小尺寸
+            if (sizeKB > targetKB) {
+                let scale = Math.sqrt(targetKB / sizeKB) * 0.85;
+                if (scale < 0.3) scale = 0.3;
+                canvas.width = Math.max(32, width * scale);
+                canvas.height = Math.max(32, height * scale);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                result = canvas.toDataURL('image/jpeg', Math.max(0.08, quality * 0.8));
+            }
+            resolve(result);
+        };
+        img.onerror = reject;
+        img.src = base64;
+    });
+}
+
+// 保存原始数据管理界面内容的备份（用于返回）
+let _originalDataModalBodyHTML = null;
+let _originalDataModalScrollPos = 0;
+
+function openCompressStickersModal() {
+    const dataModal = document.getElementById('data-modal');
+    if (!dataModal) return;
+    const modalContent = dataModal.querySelector('.modal-content');
+    if (!modalContent) return;
+    const bodyContainer = modalContent.querySelector('.dm-body');
+    if (!bodyContainer) return;
+
+    // 保存原始内容（如果尚未保存）
+    if (_originalDataModalBodyHTML === null) {
+        _originalDataModalBodyHTML = bodyContainer.innerHTML;
+        _originalDataModalScrollPos = bodyContainer.scrollTop;
+    }
+
+    // 合并两个贴图库
+    let allStickers = [];
+    if (Array.isArray(stickerLibrary)) {
+        stickerLibrary.forEach(src => {
+            allStickers.push({ src: src, type: 'partner', originalIndex: allStickers.length });
+        });
+    }
+    if (Array.isArray(myStickerLibrary)) {
+        myStickerLibrary.forEach(src => {
+            allStickers.push({ src: src, type: 'my', originalIndex: allStickers.length });
+        });
+    }
+
+    // 构建压缩界面的 HTML
+    const compressHTML = `
+        <div class="compress-header" style="display:flex; align-items:center; gap:12px; padding:0 0 12px; border-bottom:1px solid var(--border-color); margin-bottom:12px;">
+            <button id="compress-back-btn" class="dm-nav-btn" style="width:32px; height:32px;"><i class="fas fa-arrow-left"></i></button>
+            <div style="font-size:16px; font-weight:700; color:var(--text-primary);">贴图压缩</div>
+            <div style="flex:1;"></div>
+            <div class="compress-stats" style="font-size:12px; color:var(--text-secondary);">
+                <span id="compress-stats-info">共 ${allStickers.length} 张贴图</span>
+            </div>
+        </div>
+        <div style="margin:0 0 12px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+            <span style="font-size:12px;">目标大小：</span>
+            <input type="range" id="compress-target-slider" min="5" max="25" step="1" value="15" style="flex:1;">
+            <span id="compress-target-value" style="font-size:12px; min-width:45px;">15 KB</span>
+        </div>
+        <div id="compress-stickers-list" style="max-height:55vh; overflow-y:auto; margin-bottom:12px; display:flex; flex-direction:column; gap:8px;"></div>
+        <div class="compress-actions" style="display:flex; gap:12px; margin-bottom:8px;">
+            <button id="compress-select-all" class="modal-btn modal-btn-secondary" style="flex:1;">全选</button>
+            <button id="compress-deselect-all" class="modal-btn modal-btn-secondary" style="flex:1;">取消全选</button>
+            <button id="compress-start-btn" class="modal-btn modal-btn-primary" style="flex:2;">一键压缩 (0)</button>
+        </div>
+    `;
+
+    // 替换 .dm-body 内容
+    bodyContainer.innerHTML = compressHTML;
+
+    // 渲染贴图列表
+    const listContainer = document.getElementById('compress-stickers-list');
+    const statsSpan = document.getElementById('compress-stats-info');
+    const selectedMap = new Array(allStickers.length).fill(false);
+
+    function renderList() {
+        if (!listContainer) return;
+        listContainer.innerHTML = '';
+        allStickers.forEach((item, idx) => {
+            const div = document.createElement('div');
+            div.className = 'compress-sticker-item';
+            div.style.cssText = 'display:flex; align-items:center; gap:12px; background:var(--primary-bg); border-radius:12px; padding:8px 12px; border:1px solid var(--border-color);';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = selectedMap[idx];
+            checkbox.style.accentColor = 'var(--accent-color)';
+            checkbox.addEventListener('change', (e) => {
+                selectedMap[idx] = e.target.checked;
+                updateButtonCount();
+            });
+
+            const imgWrap = document.createElement('div');
+            imgWrap.style.cssText = 'width:40px; height:40px; border-radius:8px; overflow:hidden; background:var(--secondary-bg); flex-shrink:0;';
+            const img = document.createElement('img');
+            img.src = item.src;
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'cover';
+            imgWrap.appendChild(img);
+
+            const info = document.createElement('div');
+            info.style.flex = '1';
+            info.style.fontSize = '12px';
+            info.style.color = 'var(--text-secondary)';
+            info.textContent = `${item.type === 'partner' ? '对方库' : '我的库'}`;
+
+            const sizeSpan = document.createElement('div');
+            sizeSpan.style.fontSize = '10px';
+            sizeSpan.style.color = 'var(--accent-color)';
+            const rawSize = Math.ceil((item.src.length * 0.75) / 1024);
+            sizeSpan.textContent = `当前 ~${rawSize} KB`;
+            info.appendChild(sizeSpan);
+
+            div.appendChild(checkbox);
+            div.appendChild(imgWrap);
+            div.appendChild(info);
+            listContainer.appendChild(div);
+        });
+    }
+
+    function updateButtonCount() {
+        const count = selectedMap.filter(v => v).length;
+        const btn = document.getElementById('compress-start-btn');
+        if (btn) {
+            btn.textContent = `一键压缩 (${count})`;
+            btn.disabled = count === 0;
+        }
+    }
+
+    // 滑块事件
+    const targetSlider = document.getElementById('compress-target-slider');
+    const targetValue = document.getElementById('compress-target-value');
+    let targetKB = 15;
+    if (targetSlider) {
+        targetSlider.addEventListener('input', (e) => {
+            targetKB = parseInt(e.target.value);
+            targetValue.textContent = targetKB + ' KB';
+        });
+    }
+
+    // 全选/取消全选
+    const selectAllBtn = document.getElementById('compress-select-all');
+    const deselectAllBtn = document.getElementById('compress-deselect-all');
+    if (selectAllBtn) {
+        selectAllBtn.onclick = () => {
+            for (let i = 0; i < selectedMap.length; i++) selectedMap[i] = true;
+            renderList();
+            updateButtonCount();
+        };
+    }
+    if (deselectAllBtn) {
+        deselectAllBtn.onclick = () => {
+            for (let i = 0; i < selectedMap.length; i++) selectedMap[i] = false;
+            renderList();
+            updateButtonCount();
+        };
+    }
+
+    // 压缩按钮
+    const compressBtn = document.getElementById('compress-start-btn');
+    if (compressBtn) {
+        compressBtn.onclick = async () => {
+            const selectedIndices = selectedMap.reduce((arr, v, i) => v ? arr.concat(i) : arr, []);
+            if (selectedIndices.length === 0) return;
+            compressBtn.disabled = true;
+            compressBtn.textContent = `压缩中 0/${selectedIndices.length}`;
+
+            let successCount = 0;
+            for (let i = 0; i < selectedIndices.length; i++) {
+                const idx = selectedIndices[i];
+                const item = allStickers[idx];
+                try {
+                    const compressed = await compressImageToTarget(item.src, targetKB);
+                    if (item.type === 'partner') {
+                        const pos = stickerLibrary.findIndex(s => s === item.src);
+                        if (pos !== -1) stickerLibrary[pos] = compressed;
+                    } else {
+                        const pos = myStickerLibrary.findIndex(s => s === item.src);
+                        if (pos !== -1) myStickerLibrary[pos] = compressed;
+                    }
+                    item.src = compressed;
+                    successCount++;
+                } catch (err) {
+                    console.warn('压缩失败', err);
+                }
+                compressBtn.textContent = `压缩中 ${i + 1}/${selectedIndices.length}`;
+            }
+            if (typeof throttledSaveData === 'function') throttledSaveData();
+            renderList();
+            updateButtonCount();
+            showNotification(`压缩完成！成功 ${successCount} 张`, 'success');
+            compressBtn.disabled = false;
+            compressBtn.textContent = `一键压缩 (${selectedMap.filter(v => v).length})`;
+        };
+    }
+
+    // 返回按钮：恢复原始数据管理界面
+    const backBtn = document.getElementById('compress-back-btn');
+    if (backBtn) {
+        backBtn.onclick = () => {
+            if (_originalDataModalBodyHTML !== null) {
+                bodyContainer.innerHTML = _originalDataModalBodyHTML;
+                bodyContainer.scrollTop = _originalDataModalScrollPos;
+                // 重新绑定原始界面中的事件（因为 innerHTML 被替换后事件丢失）
+                // 重新执行 bindAll 来绑定事件
+                const modal = document.getElementById('data-modal');
+                const mc = modal.querySelector('.modal-content');
+                if (mc && typeof bindAll === 'function') {
+                    bindAll(mc);
+                }
+                // 可选：重新刷新存储统计
+                if (typeof updateStorageStats === 'function') updateStorageStats();
+            }
+        };
+    }
+
+    renderList();
+    updateButtonCount();
+}
