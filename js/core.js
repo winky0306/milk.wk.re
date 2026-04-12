@@ -1132,12 +1132,17 @@ function createMessageFragment(msg, prevMsg, nextMsg, lastSenderRef) {
     if (msg.replyTo) {
         const repliedText = msg.replyTo.text || (msg.replyTo.image ? '🖼 图片' : '[消息]');
         const repliedSender = msg.replyTo.sender === 'user' ? (settings.myName || '我') : (settings.partnerName || '对方');
-        messageHTML += `<div class="reply-indicator" data-reply-id="${msg.replyTo.id || ''}" style="cursor:pointer;" onclick="scrollToQuotedMessage(this)"><span class="reply-indicator-sender">${repliedSender}</span><span class="reply-indicator-text">${repliedText}</span></div>`;
+        const replyOnclick = isSnapshotMode ? '' : `scrollToQuotedMessage(this)`;
+        messageHTML += `<div class="reply-indicator" data-reply-id="${msg.replyTo.id || ''}" style="cursor:pointer;" ${replyOnclick ? `onclick="${replyOnclick}"` : ''}><span class="reply-indicator-sender">${repliedSender}</span><span class="reply-indicator-text">${repliedText}</span></div>`;
     }
 
     const isImageOnly = !msg.text && !!msg.image;
     let content = msg.text ? `<div>${msg.text.replace(/\n/g, '<br>')}</div>` : '';
-    if (msg.image) content += `<img src="${msg.image}" class="message-image${isImageOnly ? ' message-image-only' : ''}" alt="图片" style="max-width:${isImageOnly ? '100px' : '100px'}; border-radius: 12px;${!isImageOnly ? ' margin-top: 6px;' : ''} cursor: pointer;" onclick="viewImage('${msg.image}')">`;
+    if (msg.image) {
+        // 截图模式下图片不绑定放大事件
+        const imgOnclick = isSnapshotMode ? '' : `viewImage('${msg.image}')`;
+        content += `<img src="${msg.image}" class="message-image${isImageOnly ? ' message-image-only' : ''}" alt="图片" style="max-width:${isImageOnly ? '100px' : '100px'}; border-radius: 12px;${!isImageOnly ? ' margin-top: 6px;' : ''} cursor: pointer;" ${imgOnclick ? `onclick="${imgOnclick}"` : ''}>`;
+    }
     messageHTML += content;
 
     const messageDiv = document.createElement('div');
@@ -2296,22 +2301,50 @@ function toggleSnapshotMode() {
         }
         selectedSnapshotMessages = [];
         document.body.classList.add('snapshot-mode');
+
+        // 动态添加样式：隐藏消息操作按钮和截图按钮本身
+        const styleId = 'snapshot-mode-style';
+        if (!document.getElementById(styleId)) {
+            const style = document.createElement('style');
+            style.id = styleId;
+            style.textContent = `
+                .snapshot-mode .message-meta-actions {
+                    display: none !important;
+                }
+                .snapshot-mode .message:hover .message-meta-actions {
+                    display: none !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
         showSnapshotActions();
         showNotification('截图选择模式已开启，点击消息进行选择', 'info', 2500);
     } else {
         document.body.classList.remove('snapshot-mode');
+
+        // 移除动态添加的样式
+        const style = document.getElementById('snapshot-mode-style');
+        if (style) style.remove();
+
+        // 重置范围选择模式相关状态
+        isRangeSelectMode = false;
+        rangeSelectStartId = null;
+
         hideSnapshotActions();
         selectedSnapshotMessages = [];
     }
     renderMessages(true);
 }
-
 function showSnapshotActions() {
     if (document.querySelector('.snapshot-actions')) return;
 
     const actions = document.createElement('div');
     actions.className = 'snapshot-actions';
     actions.innerHTML = `
+        <button class="snapshot-action-btn range-select-btn" id="range-select-btn">
+            <i class="fas fa-vector-square"></i> 范围选择
+        </button>
         <button class="snapshot-action-btn snapshot-cancel-btn">
             <i class="fas fa-times"></i> 取消
         </button>
@@ -2320,6 +2353,30 @@ function showSnapshotActions() {
         </button>
     `;
     document.body.appendChild(actions);
+
+    // 范围选择按钮点击切换模式
+    const rangeBtn = document.getElementById('range-select-btn');
+    if (rangeBtn) {
+        rangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isRangeSelectMode = !isRangeSelectMode;
+            if (isRangeSelectMode) {
+                // 开启范围选择模式，清空起始标记和当前选中
+                rangeSelectStartId = null;
+                selectedSnapshotMessages = [];
+                renderMessages(true);
+                rangeBtn.classList.add('active');
+                rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 单点选择';
+                showNotification('范围选择模式已开启，点击起始消息，再点击结束消息', 'info', 2000);
+            } else {
+                rangeSelectStartId = null;
+                rangeBtn.classList.remove('active');
+                rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 范围选择';
+                showNotification('已切换回单点选择模式', 'info', 1500);
+            }
+            updateSnapshotConfirmBtn(selectedSnapshotMessages.length);
+        });
+    }
 
     actions.querySelector('.snapshot-cancel-btn').addEventListener('click', () => {
         if (isSnapshotMode) toggleSnapshotMode();
@@ -2333,10 +2390,17 @@ function showSnapshotActions() {
         }
     };
 }
-
 function hideSnapshotActions() {
     const actions = document.querySelector('.snapshot-actions');
     if (actions) actions.remove();
+    // 重置范围选择模式相关状态
+    isRangeSelectMode = false;
+    rangeSelectStartId = null;
+    const rangeBtn = document.getElementById('range-select-btn');
+    if (rangeBtn) {
+        rangeBtn.classList.remove('active');
+        rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 范围选择';
+    }
 }
 
 // 消息点击时的截图选择处理（需要在 initChatActionListeners 中调用）

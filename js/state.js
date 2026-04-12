@@ -9,7 +9,11 @@
         let autoEnvelopeTimer = null;  // 梦角主动写信定时器
 // 截图多选模式
         let isSnapshotMode = false;
-        let selectedSnapshotMessages = [];
+let selectedSnapshotMessages = [];
+let isRangeSelectMode = false;    // 截图模式下的范围选择开关
+let rangeSelectStartId = null;    // 范围选择的起始消息ID
+let isBatchRangeSelectMode = false;   // 批量收藏模式下的范围选择开关
+let batchRangeStartId = null;         // 范围选择的起始消息ID
         let sessionList = [];
         let messages = [];
         let settings = {};

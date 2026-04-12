@@ -26,20 +26,53 @@ function initChatActionListeners() {
                 if (isBatchFavoriteMode) {
                     const wrapper = e.target.closest('.message-wrapper');
                     if (wrapper && !e.target.closest('.message-meta-actions')) {
+                        e.preventDefault();
+                        e.stopPropagation();
                         const messageId = Number(wrapper.dataset.id);
-                        const index = selectedMessages.indexOf(messageId);
 
-                        if (index > -1) {
-                            selectedMessages.splice(index, 1);
-                            wrapper.classList.remove('selected');
+                        if (isBatchRangeSelectMode) {
+                            // 范围选择模式
+                            if (batchRangeStartId === null) {
+                                batchRangeStartId = messageId;
+                                selectedMessages = [messageId];
+                                renderMessages(true);
+                                showNotification('已标记起始消息，再点击结束消息', 'info', 1500);
+                            } else {
+                                const startIdx = messages.findIndex(m => m.id === batchRangeStartId);
+                                const endIdx = messages.findIndex(m => m.id === messageId);
+                                if (startIdx !== -1 && endIdx !== -1) {
+                                    const minIdx = Math.min(startIdx, endIdx);
+                                    const maxIdx = Math.max(startIdx, endIdx);
+                                    const selectedIds = messages.slice(minIdx, maxIdx + 1).map(m => m.id);
+                                    selectedMessages = selectedIds;
+                                    renderMessages(true);
+                                    showNotification(`已选中 ${selectedIds.length} 条消息`, 'success', 1500);
+                                } else {
+                                    showNotification('消息索引异常，请重试', 'error');
+                                }
+                                // 选择完成后自动退出范围选择模式，回到单点模式
+                                isBatchRangeSelectMode = false;
+                                batchRangeStartId = null;
+                                const rangeBtn = document.getElementById('batch-range-select-btn');
+                                if (rangeBtn) {
+                                    rangeBtn.classList.remove('active');
+                                    rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 范围选择';
+                                }
+                                const confirmBtn = document.getElementById('confirm-batch-favorite');
+                                if (confirmBtn) confirmBtn.textContent = `确认收藏 (${selectedMessages.length})`;
+                            }
                         } else {
-                            selectedMessages.push(messageId);
-                            wrapper.classList.add('selected');
-                        }
-
-                        const confirmBtn = document.getElementById('confirm-batch-favorite');
-                        if (confirmBtn) {
-                            confirmBtn.textContent = `确认收藏 (${selectedMessages.length})`;
+                            // 原有单点选择逻辑
+                            const index = selectedMessages.indexOf(messageId);
+                            if (index > -1) {
+                                selectedMessages.splice(index, 1);
+                                wrapper.classList.remove('selected');
+                            } else {
+                                selectedMessages.push(messageId);
+                                wrapper.classList.add('selected');
+                            }
+                            const confirmBtn = document.getElementById('confirm-batch-favorite');
+                            if (confirmBtn) confirmBtn.textContent = `确认收藏 (${selectedMessages.length})`;
                         }
                         return;
                     }
@@ -77,12 +110,52 @@ function initChatActionListeners() {
                     return;
                 }
 
-                // 同时需要在批量收藏模式判断之前，添加截图选择模式的点击处理（与批量收藏类似）
+              
+                // 截图多选模式下：根据模式决定是范围选择还是单点选择
                 if (isSnapshotMode) {
                     const wrapper = e.target.closest('.message-wrapper');
-                    if (wrapper && !e.target.closest('.message-meta-actions')) {
+                    if (wrapper) {
+                        e.preventDefault();
+                        e.stopPropagation();
                         const messageId = Number(wrapper.dataset.id);
-                        handleSnapshotSelection(messageId);
+
+                        if (isRangeSelectMode) {
+                            // 范围选择模式
+                            if (rangeSelectStartId === null) {
+                                // 第一次点击：记录起始消息
+                                rangeSelectStartId = messageId;
+                                // 清空之前的选中，并高亮起始消息
+                                selectedSnapshotMessages = [messageId];
+                                renderMessages(true);
+                                showNotification('已标记起始消息，再点击结束消息', 'info', 1500);
+                            } else {
+                                // 第二次点击：计算起始和结束之间的所有消息
+                                const startIdx = messages.findIndex(m => m.id === rangeSelectStartId);
+                                const endIdx = messages.findIndex(m => m.id === messageId);
+                                if (startIdx !== -1 && endIdx !== -1) {
+                                    const minIdx = Math.min(startIdx, endIdx);
+                                    const maxIdx = Math.max(startIdx, endIdx);
+                                    const selectedIds = messages.slice(minIdx, maxIdx + 1).map(m => m.id);
+                                    selectedSnapshotMessages = selectedIds;
+                                    renderMessages(true);
+                                    showNotification(`已选中 ${selectedIds.length} 条消息`, 'success', 1500);
+                                } else {
+                                    showNotification('消息索引异常，请重试', 'error');
+                                }
+                                // 选择完成后自动退出范围选择模式，回到单点模式
+                                isRangeSelectMode = false;
+                                rangeSelectStartId = null;
+                                const rangeBtn = document.getElementById('range-select-btn');
+                                if (rangeBtn) {
+                                    rangeBtn.classList.remove('active');
+                                    rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 范围选择';
+                                }
+                                updateSnapshotConfirmBtn(selectedSnapshotMessages.length);
+                            }
+                        } else {
+                            // 单点选择模式（原有逻辑）
+                            handleSnapshotSelection(messageId);
+                        }
                         return;
                     }
                 }
@@ -2615,3 +2688,102 @@ window.exitCollapseMode = function() {
         setTimeout(tryApply, 400);
     }
 })();
+// 显示批量收藏模式的底部工具栏
+function showBatchFavoriteActions() {
+    if (document.querySelector('.batch-favorite-actions')) return;
+
+    const actions = document.createElement('div');
+    actions.className = 'batch-favorite-actions';
+    actions.innerHTML = `
+        <button class="batch-fav-action-btn range-select-btn" id="batch-range-select-btn">
+            <i class="fas fa-vector-square"></i> 范围选择
+        </button>
+        <button class="batch-fav-action-btn batch-fav-cancel-btn">
+            <i class="fas fa-times"></i> 取消
+        </button>
+        <button class="batch-fav-action-btn batch-fav-confirm-btn" id="confirm-batch-favorite" disabled>
+            <i class="fas fa-star"></i> 确认收藏 (0)
+        </button>
+    `;
+    document.body.appendChild(actions);
+
+    const rangeBtn = document.getElementById('batch-range-select-btn');
+    if (rangeBtn) {
+        rangeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            isBatchRangeSelectMode = !isBatchRangeSelectMode;
+            if (isBatchRangeSelectMode) {
+                batchRangeStartId = null;
+                selectedMessages = [];
+                renderMessages(true);
+                rangeBtn.classList.add('active');
+                rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 单点选择';
+                showNotification('范围选择模式已开启，点击起始消息，再点击结束消息', 'info', 2000);
+            } else {
+                batchRangeStartId = null;
+                rangeBtn.classList.remove('active');
+                rangeBtn.innerHTML = '<i class="fas fa-vector-square"></i> 范围选择';
+                showNotification('已切换回单点选择模式', 'info', 1500);
+            }
+            const confirmBtn = document.getElementById('confirm-batch-favorite');
+            if (confirmBtn) confirmBtn.textContent = `确认收藏 (${selectedMessages.length})`;
+        });
+    }
+
+    const cancelBtn = actions.querySelector('.batch-fav-cancel-btn');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            if (isBatchFavoriteMode) toggleBatchFavoriteMode();
+        });
+    }
+
+    const confirmBtn = document.getElementById('confirm-batch-favorite');
+    if (confirmBtn) {
+        confirmBtn.disabled = selectedMessages.length === 0;
+        confirmBtn.textContent = `确认收藏 (${selectedMessages.length})`;
+        confirmBtn.addEventListener('click', () => {
+            // 执行批量收藏（这里调用您原有的收藏逻辑，如果没有则使用默认收藏）
+            if (typeof batchFavoriteSelectedMessages === 'function') {
+                batchFavoriteSelectedMessages();
+            } else {
+                // 默认收藏：将选中的消息 favorited 设为 true
+                selectedMessages.forEach(id => {
+                    const msg = messages.find(m => m.id === id);
+                    if (msg) msg.favorited = true;
+                });
+                throttledSaveData();
+                renderMessages(true);
+                showNotification(`已收藏 ${selectedMessages.length} 条消息`, 'success');
+                toggleBatchFavoriteMode(); // 退出模式
+            }
+        });
+    }
+}
+
+function hideBatchFavoriteActions() {
+    const actions = document.querySelector('.batch-favorite-actions');
+    if (actions) actions.remove();
+    isBatchRangeSelectMode = false;
+    batchRangeStartId = null;
+}
+// 开启/关闭批量收藏模式
+function toggleBatchFavoriteMode() {
+    isBatchFavoriteMode = !isBatchFavoriteMode;
+
+    if (isBatchFavoriteMode) {
+        // 如果截图模式开启，先关闭它
+        if (typeof isSnapshotMode !== 'undefined' && isSnapshotMode) {
+            toggleSnapshotMode();
+        }
+        selectedMessages = [];
+        document.body.classList.add('batch-favorite-mode');
+        showBatchFavoriteActions();
+        renderMessages(true);
+        showNotification('批量收藏模式已开启，点击消息选择要收藏的消息', 'info', 2500);
+    } else {
+        document.body.classList.remove('batch-favorite-mode');
+        hideBatchFavoriteActions();
+        selectedMessages = [];
+        renderMessages(true);
+    }
+}
