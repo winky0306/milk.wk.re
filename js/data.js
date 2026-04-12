@@ -618,7 +618,165 @@ function updateStorageUsageBar() {
             }
         };
     }
-})();
+    // 新增：获取真实存储用量（基于 Storage API）
+    async function getRealStorageUsage() {
+        if ('storage' in navigator && 'estimate' in navigator.storage) {
+            try {
+                const estimate = await navigator.storage.estimate();
+                return {
+                    usage: estimate.usage || 0,
+                    quota: estimate.quota || 0,
+                    supported: true
+                };
+            } catch (e) {
+                console.warn('Storage estimate failed', e);
+            }
+        }
+        return { usage: 0, quota: 0, supported: false };
+    }
+
+    // 增强版存储统计：真实配额 + 分类详情
+    async function updateStorageStats() {
+        // 获取真实存储信息
+        const realStorage = await getRealStorageUsage();
+        let totalBytes = realStorage.usage;
+        let quotaBytes = realStorage.quota;
+        let msgsBytes = 0, settingsBytes = 0, mediaBytes = 0;
+
+        // 遍历 IndexedDB 获得分类统计（消息/设置/媒体）
+        if (window.localforage) {
+            try {
+                const keys = await localforage.keys();
+                for (const k of keys) {
+                    const raw = await localforage.getItem(k);
+                    if (raw == null) continue;
+                    const str = typeof raw === 'string' ? raw : JSON.stringify(raw);
+                    const bytes = (k.length + str.length) * 2;
+                    if (/messages|msgs|session/i.test(k)) msgsBytes += bytes;
+                    else if (/avatar|image|photo|bg|background|wallpaper|sticker/i.test(k)) mediaBytes += bytes;
+                    else settingsBytes += bytes;
+                }
+            } catch (e) { console.warn('IndexedDB遍历失败', e); }
+        }
+
+        // 补充 localStorage 统计（不影响总量，只用于分类）
+        let lsTotal = 0, lsMsgs = 0, lsSettings = 0, lsMedia = 0;
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i) || '';
+            const v = localStorage.getItem(k) || '';
+            const bytes = (k.length + v.length) * 2;
+            lsTotal += bytes;
+            if (/messages|msgs|session/i.test(k)) lsMsgs += bytes;
+            else if (v.startsWith('data:image') || v.startsWith('data:video')) lsMedia += bytes;
+            else lsSettings += bytes;
+        }
+
+        // 合并分类（如果真实存储不可用，回退到 localStorage+IndexedDB 总量）
+        const finalTotal = realStorage.supported ? totalBytes : (lsTotal + (totalBytes || 0));
+        const finalQuota = realStorage.supported ? quotaBytes : (5 * 1024 * 1024); // 默认5MB回退
+
+        msgsBytes += lsMsgs;
+        settingsBytes += lsSettings;
+        mediaBytes += lsMedia;
+
+        // 更新 UI 元素
+        const totalEl = document.getElementById('dm-storage-total');
+        const barEl = document.getElementById('dm-storage-bar');
+        const msgsEl = document.getElementById('dm-stat-msgs');
+        const settingsEl = document.getElementById('dm-stat-settings');
+        const mediaEl = document.getElementById('dm-stat-media');
+
+        if (totalEl) {
+            const usedMB = (finalTotal / (1024 * 1024)).toFixed(2);
+            const quotaMB = (finalQuota / (1024 * 1024)).toFixed(0);
+            totalEl.textContent = `${usedMB} MB / ${quotaMB} MB`;
+        }
+
+        if (barEl && finalQuota > 0) {
+            const percent = Math.min(100, (finalTotal / finalQuota) * 100);
+            barEl.style.width = `${percent}%`;
+            // 根据使用率改变颜色
+            if (percent > 80) barEl.style.background = 'linear-gradient(90deg,#FF3B30,#CC0000)';
+            else if (percent > 50) barEl.style.background = 'linear-gradient(90deg,#FF9F0A,#E07000)';
+            else barEl.style.background = 'linear-gradient(90deg,var(--accent-color),rgba(var(--accent-color-rgb),0.6))';
+        }
+
+        const formatBytes = (b) => b > 1048576 ? (b / 1048576).toFixed(2) + ' MB' : b > 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+        if (msgsEl) msgsEl.textContent = formatBytes(msgsBytes);
+        if (settingsEl) settingsEl.textContent = formatBytes(settingsBytes);
+        if (mediaEl) mediaEl.textContent = formatBytes(mediaBytes);
+    }
+
+    // 修复容器显示不全：为模态框内容区域添加滚动和自适应高度
+    // 在 data.js 中找到 fixModalOverflow 函数，替换为以下版本
+    function fixModalOverflow(modalElement) {
+        if (!modalElement) return;
+        const content = modalElement.querySelector('.modal-content');
+        if (content) {
+            // 移除自定义高度限制，沿用原始 CSS 中的 93dvh
+            content.style.maxHeight = '';
+            content.style.overflowY = '';
+            content.style.display = 'flex';
+            content.style.flexDirection = 'column';
+        }
+        // 确保存储卡片内部不被截断
+        const storageCard = modalElement.querySelector('.dm-storage-card');
+        if (storageCard) {
+            storageCard.style.overflow = 'visible';
+            storageCard.style.flexShrink = '0';
+        }
+        // 确保统计网格文字完整显示
+        const statsGrid = modalElement.querySelector('.dm-stats-grid');
+        if (statsGrid) {
+            statsGrid.style.flexWrap = 'wrap';
+            statsGrid.style.gap = '8px';
+        }
+    }
+
+    // 覆盖原有的 updateStats 函数
+    window.updateStorageStats = updateStorageStats;
+
+    // 在模态框打开时调用新统计 + 修复布局
+    const originalOnModalOpen = window.onModalOpen || function () { };
+    window.onModalOpen = function (modal) {
+        if (modal && modal.id === 'data-modal') {
+            fixModalOverflow(modal);
+            updateStorageStats().catch(console.warn);
+        }
+        if (originalOnModalOpen) originalOnModalOpen(modal);
+    };
+
+    // 监听 data-modal 显示事件（确保每次打开都刷新）
+    const dataModal = document.getElementById('data-modal');
+    if (dataModal) {
+        const observer = new MutationObserver(() => {
+            if (dataModal.style.display === 'flex' || dataModal.style.display === 'block') {
+                fixModalOverflow(dataModal);
+                updateStorageStats().catch(console.warn);
+            }
+        });
+        observer.observe(dataModal, { attributes: true, attributeFilter: ['style'] });
+    }
+
+    // 兼容原有调用（如按钮点击）
+    if (typeof updateStorageUsageBar !== 'undefined') {
+        const oldUpdate = updateStorageUsageBar;
+        window.updateStorageUsageBar = function () {
+            updateStorageStats().catch(console.warn);
+            if (oldUpdate) oldUpdate();
+        };
+    }
+
+    // 页面加载完成后执行一次
+    document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(() => {
+            if (dataModal && dataModal.style.display === 'flex') {
+                fixModalOverflow(dataModal);
+                updateStorageStats().catch(console.warn);
+            }
+        }, 500);
+    });
+})(); 
 
 document.addEventListener('DOMContentLoaded', function() {
     var btn = document.getElementById('data-settings');
@@ -691,3 +849,69 @@ document.addEventListener('DOMContentLoaded', function() {
         statusEl.textContent = '关闭状态 — 开启后可在后台接收消息提醒';
     }
 });
+// 在 data.js 文件末尾（DOMContentLoaded 之后）添加以下样式注入
+(function injectDataModalStyles() {
+    const styleId = 'dm-fix-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+        /* 修复存储卡片内部显示不全 */
+        #data-modal .dm-storage-card {
+            margin-bottom: 8px;
+            overflow: visible !important;
+        }
+        #data-modal .dm-stats-grid {
+            display: flex !important;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        #data-modal .dm-stat-block {
+            flex: 1;
+            min-width: 70px;
+            white-space: normal;
+            word-break: break-word;
+            padding: 8px 4px;
+        }
+        #data-modal .dm-stat-pill-val {
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        #data-modal .dm-stat-pill-key {
+            font-size: 10px;
+            white-space: normal;
+            line-height: 1.3;
+        }
+        #data-modal .dm-progress-track {
+            margin-top: 8px;
+            width: 100%;
+            overflow: hidden;
+        }
+        /* 移动端适配：保证文字不溢出 */
+        @media (max-width: 480px) {
+            #data-modal .dm-stat-pill-val {
+                font-size: 12px;
+            }
+            #data-modal .dm-stat-pill-key {
+                font-size: 9px;
+            }
+            #data-modal .dm-stats-grid {
+                gap: 6px;
+            }
+        }
+        /* 确保整个模态框内容可滚动，但卡片本身完整显示 */
+        #data-modal .modal-content {
+            height: auto;
+            max-height: 90vh;
+            overflow: hidden;
+        }
+        #data-modal .dm-body {
+            flex: 1;
+            overflow-y: auto;
+            padding-bottom: 24px;
+        }
+    `;
+    document.head.appendChild(style);
+})();
