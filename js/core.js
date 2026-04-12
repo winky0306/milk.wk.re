@@ -2419,6 +2419,7 @@ function handleSnapshotSelection(messageId) {
 }
 
 // 生成聊天截图（修复手机端群成员头像/名字显示问题）
+// ==================== 修复后的截图生成函数（头像位置正确） ====================
 async function generateMessagesSnapshot() {
     if (selectedSnapshotMessages.length === 0) {
         showNotification('请至少选择一条消息', 'warning');
@@ -2427,7 +2428,7 @@ async function generateMessagesSnapshot() {
 
     showNotification('正在生成截图，请稍候...', 'info', 2000);
 
-    // 1. 重新获取最新的群聊设置（确保与当前状态一致）
+    // 1. 获取最新的群聊设置
     let groupChatSettings = { enabled: false, showAvatar: true, showName: true, members: [] };
     try {
         const saved = localStorage.getItem('groupChatSettings');
@@ -2441,19 +2442,17 @@ async function generateMessagesSnapshot() {
     const isGroupMode = groupChatSettings.enabled === true;
     const showGroupName = isGroupMode && groupChatSettings.showName === true;
 
-    // 2. 辅助函数：异步加载单个成员的头像（如果还没有 dataURL）
+    // 2. 辅助函数：异步加载成员头像
     async function ensureMemberAvatar(member) {
         if (!member) return null;
-        // 已有 dataURL 直接返回
         if (member.avatar && typeof member.avatar === 'string' && member.avatar.startsWith('data:')) {
             return member.avatar;
         }
-        // 如果有 avatarRef，尝试从 localforage 读取
         if (member.avatarRef && window.localforage) {
             try {
                 const stored = await localforage.getItem(member.avatarRef);
                 if (stored && typeof stored === 'string') {
-                    member.avatar = stored;   // 缓存到成员对象
+                    member.avatar = stored;
                     return stored;
                 }
             } catch (e) { console.warn('加载成员头像失败', e); }
@@ -2465,14 +2464,11 @@ async function generateMessagesSnapshot() {
     const selectedMsgs = messages.filter(m => selectedSnapshotMessages.includes(m.id))
         .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-    // 4. 预加载所有涉及到的成员的头像
+    // 4. 预加载成员头像
+    const msgMemberMap = new Map();
     const memberPromises = [];
-    const msgMemberMap = new Map(); // 记录每条消息对应的成员对象
-
     for (const msg of selectedMsgs) {
-        // 只处理非 user 且群聊模式下的消息
         if (msg.sender !== 'user' && isGroupMode && groupChatSettings.members.length) {
-            // 根据消息 ID 计算成员（与 getGroupMemberForMessage 算法一致）
             let seed = 0;
             const idStr = String(msg.id);
             for (let i = 0; i < idStr.length; i++) seed += idStr.charCodeAt(i) * (i + 1);
@@ -2483,7 +2479,6 @@ async function generateMessagesSnapshot() {
             }
         }
     }
-    // 等待所有成员头像加载完成
     await Promise.all(memberPromises);
 
     // 5. 创建临时容器
@@ -2514,12 +2509,11 @@ async function generateMessagesSnapshot() {
     header.innerHTML = `📸 聊天截图 · ${new Date().toLocaleString()}`;
     container.appendChild(header);
 
-    // 6. 渲染每条消息（此时成员头像已就绪）
+    // 6. 渲染每条消息（修复版：引用回复 + 角色名在气泡外 + 头像位置正确）
     for (let i = 0; i < selectedMsgs.length; i++) {
         const msg = selectedMsgs[i];
         const member = msgMemberMap.get(msg.id);
         const isUser = (msg.sender === 'user');
-        const isReceived = !isUser || (member !== null);
 
         const msgWrapper = document.createElement('div');
         msgWrapper.className = `snapshot-msg-wrapper ${isUser && !member ? 'sent' : 'received'}`;
@@ -2530,7 +2524,14 @@ async function generateMessagesSnapshot() {
             align-items: flex-start;
         `;
 
-        // 头像部分
+        // 根据发送者设置 flex-direction（自己：row-reverse 让头像在右边，对方：row 让头像在左边）
+        if (isUser && !member) {
+            msgWrapper.style.flexDirection = 'row-reverse';
+        } else {
+            msgWrapper.style.flexDirection = 'row';
+        }
+
+        // --- 头像部分 ---
         const avatarDiv = document.createElement('div');
         avatarDiv.className = 'snapshot-avatar';
         avatarDiv.style.cssText = `
@@ -2544,10 +2545,8 @@ async function generateMessagesSnapshot() {
             align-items: center;
             justify-content: center;
         `;
-
         let avatarSrc = null;
         const defaultIcon = '<i class="fas fa-user" style="color:#fff;font-size:16px;"></i>';
-
         if (member && member.avatar) {
             avatarSrc = member.avatar;
         } else if (isUser) {
@@ -2557,18 +2556,51 @@ async function generateMessagesSnapshot() {
             const partnerImg = DOMElements.partner.avatar.querySelector('img');
             avatarSrc = partnerImg ? partnerImg.src : null;
         }
-
         if (avatarSrc) {
             avatarDiv.innerHTML = `<img src="${avatarSrc}" style="width:100%;height:100%;object-fit:cover;">`;
         } else {
             avatarDiv.innerHTML = defaultIcon;
         }
 
-        // 气泡内容
+        // --- 消息主体容器（气泡 + 可能的名字）---
+        const mainContent = document.createElement('div');
+        mainContent.style.cssText = `
+            max-width: 260px;
+            display: flex;
+            flex-direction: column;
+            align-items: ${isUser && !member ? 'flex-end' : 'flex-start'};
+        `;
+
+        // 【修复点1】角色名显示在气泡外部（仅对方消息或群聊模式）
+        let shouldShowName = false;
+        let displayName = '';
+        if (member && showGroupName) {
+            shouldShowName = true;
+            displayName = member.name || '成员';
+        } else if (!isUser && !member && (settings.showPartnerNameInChat || showPartnerNameInChat)) {
+            shouldShowName = true;
+            displayName = settings.partnerName || '对方';
+        }
+
+        if (shouldShowName) {
+            const nameLabel = document.createElement('div');
+            nameLabel.className = 'snapshot-sender-name';
+            nameLabel.style.cssText = `
+                font-size: 11px;
+                font-weight: 600;
+                color: var(--accent-color);
+                margin-bottom: 4px;
+                letter-spacing: 0.3px;
+                text-align: ${isUser && !member ? 'right' : 'left'};
+            `;
+            nameLabel.textContent = displayName;
+            mainContent.appendChild(nameLabel);
+        }
+
+        // --- 气泡（内部包含引用和正文）---
         const bubbleDiv = document.createElement('div');
         bubbleDiv.className = `snapshot-bubble ${isUser && !member ? 'snapshot-sent' : 'snapshot-received'}`;
         bubbleDiv.style.cssText = `
-            max-width: 260px;
             padding: 8px 12px;
             border-radius: ${isUser && !member ? '16px 16px 4px 16px' : '16px 16px 16px 4px'};
             background: ${isUser && !member ? 'var(--message-sent-bg)' : 'var(--message-received-bg)'};
@@ -2578,46 +2610,41 @@ async function generateMessagesSnapshot() {
             word-break: break-word;
         `;
 
-        // 群聊模式显示成员名字
-        if (isGroupMode && showGroupName && member) {
-            const nameLabel = document.createElement('div');
-            nameLabel.className = 'snapshot-group-name';
-            nameLabel.style.cssText = `
-                font-size: 11px;
-                font-weight: 600;
-                color: var(--accent-color);
-                margin-bottom: 4px;
-                letter-spacing: 0.3px;
+        let bubbleContent = '';
+
+        // 【修复点2】显示引用回复内容
+        if (msg.replyTo && msg.replyTo.id) {
+            const repliedMsg = messages.find(m => m.id === msg.replyTo.id);
+            const repliedText = repliedMsg
+                ? (repliedMsg.text ? repliedMsg.text.slice(0, 60) : (repliedMsg.image ? '🖼 图片' : '[消息]'))
+                : (msg.replyTo.text || '[原消息]');
+            const repliedSender = msg.replyTo.sender === 'user'
+                ? (settings.myName || '我')
+                : (settings.partnerName || '对方');
+            bubbleContent += `
+                <div class="snapshot-reply-indicator" style="
+                    font-size: 11px;
+                    color: ${isUser && !member ? 'rgba(255,255,255,0.7)' : 'var(--text-secondary)'};
+                    border-left: 2px solid var(--accent-color);
+                    padding-left: 6px;
+                    margin-bottom: 5px;
+                    opacity: 0.8;
+                ">
+                    <span style="font-weight:600;">${repliedSender}</span>：${repliedText}
+                </div>
             `;
-            nameLabel.textContent = member.name || '成员';
-            bubbleDiv.appendChild(nameLabel);
-        }
-        // 单人模式且开启“显示对方名字”
-        else if (!isGroupMode && !isUser && (settings.showPartnerNameInChat || showPartnerNameInChat)) {
-            const nameLabel = document.createElement('div');
-            nameLabel.className = 'snapshot-group-name';
-            nameLabel.style.cssText = `
-                font-size: 11px;
-                font-weight: 600;
-                color: var(--accent-color);
-                margin-bottom: 4px;
-                letter-spacing: 0.3px;
-            `;
-            nameLabel.textContent = settings.partnerName || '对方';
-            bubbleDiv.appendChild(nameLabel);
         }
 
-        // 消息内容
-        let contentHtml = '';
+        // 消息正文（文本 + 图片）
         if (msg.text) {
-            contentHtml += `<div>${msg.text.replace(/\n/g, '<br>')}</div>`;
+            bubbleContent += `<div>${msg.text.replace(/\n/g, '<br>')}</div>`;
         }
         if (msg.image) {
-            contentHtml += `<img src="${msg.image}" style="max-width:100%;max-height:150px;border-radius:8px;margin-top:6px;">`;
+            bubbleContent += `<img src="${msg.image}" style="max-width:100%;max-height:150px;border-radius:8px;margin-top:6px;">`;
         }
-        bubbleDiv.innerHTML += contentHtml;
+        bubbleDiv.innerHTML = bubbleContent;
 
-        // 时间戳
+        // 时间戳（放在气泡内部底部）
         const timeSpan = document.createElement('div');
         timeSpan.className = 'snapshot-time';
         timeSpan.style.cssText = `
@@ -2639,18 +2666,13 @@ async function generateMessagesSnapshot() {
             timeStr = ts.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
         }
         timeSpan.textContent = timeStr;
+        bubbleDiv.appendChild(timeSpan);
 
-        // 组装布局
-        if (isUser && !member) {
-            bubbleDiv.appendChild(timeSpan);
-            msgWrapper.appendChild(bubbleDiv);
-            msgWrapper.appendChild(avatarDiv);
-            msgWrapper.style.justifyContent = 'flex-end';
-        } else {
-            msgWrapper.appendChild(avatarDiv);
-            bubbleDiv.appendChild(timeSpan);
-            msgWrapper.appendChild(bubbleDiv);
-        }
+        mainContent.appendChild(bubbleDiv);
+
+        // 组装整个消息块：先添加头像，再添加主体（通过 flex-direction 控制顺序）
+        msgWrapper.appendChild(avatarDiv);
+        msgWrapper.appendChild(mainContent);
         container.appendChild(msgWrapper);
     }
 
