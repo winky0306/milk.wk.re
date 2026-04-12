@@ -45,7 +45,7 @@
         +       '<i class="fas fa-chevron-right dm-tile-arrow"></i>'
         + '</div>'
      
-        +   '</div>'
+        +  '</div>'        // 关闭备份与恢复的 dm-grid
         // 在备份与恢复区块之后插入
         + '<div class="dm-section-label"><i class="fas fa-compress-alt"></i> 工具</div>'
         + '<div class="dm-grid">'
@@ -54,7 +54,7 @@
         + '<div class="dm-tile-info"><div class="dm-tile-title">贴图压缩</div><div class="dm-tile-desc">将表情库图片压缩到15KB以内</div></div>'
         + '<i class="fas fa-chevron-right dm-tile-arrow"></i>'
         + '</div>'
-        + '</div>'
+        + '</div>'           // 关闭工具区域的 dm-grid
         +   '<div style="display:none">'
         +     '<button id="export-all-settings"></button>'
         +     '<button id="import-all-settings"></button>'
@@ -561,12 +561,7 @@
             });
             _contentObserver.observe(mc, { childList: true, subtree: false });
         }
-        // 确保压缩模态框存在于 body 中
-        if (!document.getElementById('compress-stickers-modal')) {
-            var div = document.createElement('div');
-            div.innerHTML = COMPRESS_MODAL_HTML;
-            document.body.appendChild(div.firstElementChild);
-        }
+        
     }
 
     if (document.readyState === 'loading') {
