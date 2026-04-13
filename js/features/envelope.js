@@ -128,13 +128,23 @@ window.openEnvelopeAndViewReply = function(replyId) {
 };
 
 function generateEnvelopeReplyText() {
+    // 如果字卡库为空，直接返回一个友好提示，避免出现 undefined
+    if (!customReplies || customReplies.length === 0) {
+        return "暂时不知道说什么好，你可以先去「高级功能 → 自定义回复」里添加一些字卡～";
+    }
     const sourcePool = [...customReplies];
     const sentenceCount = Math.floor(Math.random() * (12 - 8 + 1)) + 8;
     let replyContent = "";
     for (let i = 0; i < sentenceCount; i++) {
         const randomSentence = sourcePool[Math.floor(Math.random() * sourcePool.length)];
+        // 多加一层保护：万一 randomSentence 是 undefined，就跳过
+        if (!randomSentence) continue;
         const punctuation = Math.random() < 0.2 ? "！" : (Math.random() < 0.2 ? "..." : "。");
         replyContent += randomSentence + punctuation;
+    }
+    // 如果最终内容还是空的（全部跳过），返回默认语句
+    if (!replyContent.trim()) {
+        return "回复出现错误～";
     }
     return replyContent;
 }
