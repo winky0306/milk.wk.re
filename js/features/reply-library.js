@@ -716,6 +716,9 @@ function _renderModernToolbar() {
                     const targetStatuses = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customStatuses`) || [];
                     const targetMottos = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customMottos`) || [];
                     const targetIntros = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customIntros`) || [];
+                    const targetStickers = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_stickerLibrary`) || [];
+                    const targetMyStickers = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_myStickerLibrary`) || [];
+                    const targetStickerGroups = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customStickerGroups`) || [];
 
                     const importData = {
                         customReplies: targetReplies,
@@ -724,7 +727,9 @@ function _renderModernToolbar() {
                         customPokes: targetPokes,
                         customStatuses: targetStatuses,
                         customMottos: targetMottos,
-                        customIntros: targetIntros
+                        customIntros: targetIntros,
+                        stickerLibrary: targetStickers,
+                        customStickerGroups: targetStickerGroups
                     };
 
                     // 调用现有的导入选择界面
@@ -2303,7 +2308,8 @@ function _showExportUI() {
         { id: '_re_mottos',   icon: ICONS.quote,     label: '顶部格言',  count: customMottos.length,           key: 'customMottos' },
         { id: '_re_intros',   icon: ICONS.play,      label: '开场动画',  count: customIntros.length,           key: 'customIntros' },
         { id: '_re_emojis',   icon: ICONS.smile,     label: 'Emoji 库',  count: customEmojis.length,           key: 'customEmojis' },
-        { id: '_re_groups',   icon: ICONS.folderBig, label: '字卡分组',  count: (customReplyGroups||[]).length, key: 'customReplyGroups', extra: true },
+        { id: '_re_groups', icon: ICONS.folderBig, label: '字卡分组', count: (customReplyGroups || []).length, key: 'customReplyGroups', extra: true },
+        
     ];
 
     if (customReplyGroups && customReplyGroups.length > 0) {
@@ -2503,7 +2509,9 @@ function _showImportUI(data) {
         { id: '_ri_mottos',   icon: ICONS.quote,     label: '顶部格言',  data: data.customMottos,      key: 'customMottos' },
         { id: '_ri_intros',   icon: ICONS.play,      label: '开场动画',  data: data.customIntros,      key: 'customIntros' },
         { id: '_ri_emojis',   icon: ICONS.smile,     label: 'Emoji 库',  data: data.customEmojis,      key: 'customEmojis' },
-        { id: '_ri_groups',   icon: ICONS.folderBig, label: '字卡分组',  data: data.customReplyGroups, key: 'customReplyGroups', extra: true },
+        { id: '_ri_groups', icon: ICONS.folderBig, label: '字卡分组', data: data.customReplyGroups, key: 'customReplyGroups', extra: true },
+        { id: '_ri_stickers', icon: ICONS.sticker, label: '表情库', data: data.stickerLibrary, key: 'stickerLibrary' },
+        { id: '_ri_sticker_groups', icon: ICONS.folderBig, label: '贴纸分组', data: data.customStickerGroups, key: 'customStickerGroups', extra: true },
     ].filter(m => Array.isArray(m.data));
 
     _showIOSheet(`导入字卡`, `文件中包含 ${modules.length} 个模块`, modules, ICONS.import, (selected, mode) => {
@@ -2520,6 +2528,13 @@ function _showImportUI(data) {
                     else if (m.key === 'customIntros') { customIntros = data.customIntros; totalAdded += data.customIntros.length; }
                     else if (m.key === 'customEmojis') { customEmojis = data.customEmojis; }
                     else if (m.key === 'customReplyGroups') { window.customReplyGroups = data.customReplyGroups; }
+                    else if (m.key === 'stickerLibrary') {
+                        stickerLibrary = data.stickerLibrary;
+                        totalAdded += (data.stickerLibrary || []).length;
+                    }
+                    else if (m.key === 'customStickerGroups') {
+                        window.customStickerGroups = data.customStickerGroups;
+                    }
                 });
             } else {
                 selected.forEach(m => {
@@ -2549,6 +2564,21 @@ function _showImportUI(data) {
                         if (!window.customReplyGroups) window.customReplyGroups = [];
                         data.customReplyGroups.forEach(dg => {
                             if (!customReplyGroups.find(g => g.name === dg.name)) customReplyGroups.push(dg);
+                        });
+
+                    }
+                    else if (m.key === 'stickerLibrary') {
+                        const before = stickerLibrary.length;
+                        const newStickers = (data.stickerLibrary || []).filter(s => !stickerLibrary.includes(s));
+                        stickerLibrary.push(...newStickers);
+                        totalAdded += stickerLibrary.length - before;
+                    }
+                    else if (m.key === 'customStickerGroups') {
+                        if (!window.customStickerGroups) window.customStickerGroups = [];
+                        (data.customStickerGroups || []).forEach(g => {
+                            if (!window.customStickerGroups.find(ex => ex.name === g.name)) {
+                                window.customStickerGroups.push(g);
+                            }
                         });
                     }
                 });

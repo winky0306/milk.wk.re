@@ -21,6 +21,11 @@ async function processAllCharacters() {
 }
 
 async function maybeGenerateReplyForCharacter(char) {
+    // ========== 修改点：后台角色不自动回复 ==========
+    // 只有当前角色才会自动回复，后台角色直接跳过
+    if (char.id !== CURRENT_CHARACTER_ID) return;
+    // =============================================
+
     const charSettings = await localforage.getItem(`${APP_PREFIX}${char.id}_chatSettings`);
     if (!charSettings) return; // 读取失败直接返回，不回复
     if (charSettings.autoReplyEnabled === false) return;
