@@ -408,22 +408,32 @@ function applyGlobalThemeCss(cssCode) {
     styleTag.textContent = cssCode;
 }
 
+// 全量导出（支持导出所有角色或当前角色）
 async function exportAllData() {
-    // 询问导出范围
     const scope = confirm('导出全部角色数据？\n点击“确定”导出所有角色，点击“取消”仅导出当前角色');
     let payload;
     if (scope) {
-        // 导出所有角色：遍历 CHARACTER_LIST，合并每个角色的数据
+        // 导出所有角色
         payload = await buildFullBackupForAllCharacters();
     } else {
+        // 仅导出当前角色（使用已有的 ChatBackup 模块）
         payload = await ChatBackup.buildBackupPayload({
             inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
             inclThemes: true, inclDg: true, inclStickers: true
         });
     }
-    // 序列化并下载...
-}
 
+    // 序列化为 JSON 字符串
+    const jsonStr = JSON.stringify(payload, null, 2);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = scope
+        ? `chatapp-all-characters-${dateStr}.json`
+        : `chatapp-backup-${dateStr}.json`;
+
+    // 下载文件（自动处理移动端分享）
+    exportDataToMobileOrPC(jsonStr, fileName);
+    showNotification('备份导出成功', 'success');
+}
 async function buildFullBackupForAllCharacters() {
     const allData = {
         type: 'chatapp-backup-v5-multi',
@@ -432,25 +442,35 @@ async function buildFullBackupForAllCharacters() {
         global: {}
     };
     for (const char of CHARACTER_LIST) {
+        // 临时保存并替换 CURRENT_CHARACTER_ID，确保 buildBackupPayload 只导出当前角色数据
+        const oldCharId = CURRENT_CHARACTER_ID;
+        window.CURRENT_CHARACTER_ID = char.id;
         const charData = await ChatBackup.buildBackupPayload({
             inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
             inclThemes: true, inclDg: true, inclStickers: true
         });
-        // 将当前角色的存储键重新映射为不带角色前缀的相对键
+        window.CURRENT_CHARACTER_ID = oldCharId;
+
+        // 将存储键转换为相对路径（去掉角色前缀）
         const remapped = {};
+        const prefix = `${APP_PREFIX}${char.id}_`;
         for (const [key, val] of Object.entries(charData.localforage)) {
-            const relativeKey = key.replace(`${APP_PREFIX}${char.id}_`, '');
-            remapped[relativeKey] = val;
+            if (key.startsWith(prefix)) {
+                const relativeKey = key.slice(prefix.length);
+                remapped[relativeKey] = val;
+            }
         }
+
         allData.characters.push({
             id: char.id,
             name: char.name,
             avatar: char.avatar,
             data: remapped,
-            localStorage: charData.localStorage
+            localStorage: charData.localStorage,
+            mediaStore: charData.mediaStore   // ✅ 关键：保存图片映射表
         });
     }
-    // 保存全局数据（主题方案、角色列表等）
+    // 保存全局数据
     allData.global = {
         customThemes: customThemes,
         themeSchemes: themeSchemes,
@@ -461,10 +481,92 @@ async function buildFullBackupForAllCharacters() {
 }
 async function importAllData(file) {
     if (!file) return;
-    if (file.size > 220 * 1024 * 1024) {
-        showNotification('文件过大（>220MB），请确认是否为正确备份', 'error');
+    
+
+    // 解析文件内容
+    const data = await ChatBackup.loadBackupFromFile(file);
+
+    // 检测是否为多角色备份（导出时选择“所有角色”生成的格式）
+    if (data.type === 'chatapp-backup-v5-multi' && Array.isArray(data.characters)) {
+        if (!confirm('检测到多角色备份文件。导入将创建/覆盖角色及其所有数据，是否继续？')) return;
+        showNotification('正在恢复多角色数据...', 'info', 3000);
+
+        // 获取现有角色列表
+        let existingChars = [];
+        try {
+            existingChars = await localforage.getItem(`${APP_PREFIX}character_list`) || [];
+        } catch (e) { }
+
+        // 恢复每个角色
+        for (const charBackup of data.characters) {
+            const charId = charBackup.id;
+            const charName = charBackup.name;
+            let targetChar = existingChars.find(c => c.id === charId || c.name === charName);
+
+            if (!targetChar) {
+                // 创建新角色
+                targetChar = {
+                    id: charId,
+                    name: charName,
+                    avatar: charBackup.avatar || null,
+                    createdAt: Date.now(),
+                    unreadCount: 0,
+                    lastMessage: '',
+                    lastTimestamp: null,
+                    doNotDisturb: false
+                };
+                existingChars.push(targetChar);
+            } else if (targetChar.id !== charId) {
+                // 重名但 id 不同：用备份中的 id 覆盖（保持角色独立性）
+                targetChar.id = charId;
+                targetChar.name = charName;
+                targetChar.avatar = charBackup.avatar || null;
+            }
+
+            // 恢复该角色的 IndexedDB 数据
+            const charPrefix = `${APP_PREFIX}${targetChar.id}_`;
+            for (const [relativeKey, value] of Object.entries(charBackup.data)) {
+                const fullKey = charPrefix + relativeKey;
+                // 如果该角色备份带有 mediaStore，需要还原图片
+                let finalValue = value;
+                if (charBackup.mediaStore && typeof ChatBackup !== 'undefined' && ChatBackup.inlineMediaTree) {
+                    finalValue = ChatBackup.inlineMediaTree(value, charBackup.mediaStore);
+                }
+                await localforage.setItem(fullKey, finalValue);
+            }
+            // 恢复该角色的 localStorage 数据（如群聊设置）
+            if (charBackup.localStorage) {
+                for (const [lsKey, lsVal] of Object.entries(charBackup.localStorage)) {
+                    if (lsKey.startsWith('groupChatSettings_')) {
+                        const newLsKey = `groupChatSettings_${targetChar.id}`;
+                        localStorage.setItem(newLsKey, lsVal);
+                    }
+                }
+            }
+        }
+
+        // 恢复全局数据（主题方案、角色列表等）
+        if (data.global) {
+            if (data.global.customThemes) customThemes = data.global.customThemes;
+            if (data.global.themeSchemes) themeSchemes = data.global.themeSchemes;
+            // 角色列表已通过上面更新，直接保存
+        }
+
+        // 保存更新后的角色列表
+        await localforage.setItem(`${APP_PREFIX}character_list`, existingChars);
+
+        // 如果当前角色 ID 不在列表中，切换到第一个
+        if (!existingChars.some(c => c.id === CURRENT_CHARACTER_ID)) {
+            await localforage.setItem(`${APP_PREFIX}current_character`, existingChars[0].id);
+        }
+
+        showNotification('多角色恢复完成，即将刷新页面', 'success', 2500);
+        setTimeout(() => location.reload(), 2000);
         return;
     }
+
+    // 下面是原有的单角色/全量备份导入逻辑（不要动，保持原样）
+    // ... 原有的 if (fullLike) 等代码 ...
     try {
         if (typeof ChatBackup === 'undefined' || !ChatBackup.loadBackupFromFile || !ChatBackup.applyBackupToStorage) {
             showNotification('备份模块未加载，请刷新页面重试', 'error');

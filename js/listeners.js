@@ -629,22 +629,7 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
                     }
                 })();
             });
-            const exportChatBtnDm = document.getElementById('export-chat-btn');
-            const importChatBtnDm = document.getElementById('import-chat-btn');
-            if (exportChatBtnDm) {
-                exportChatBtnDm.addEventListener('click', () => {
-                    if (typeof exportChatHistory === 'function') exportChatHistory();
-                    else showNotification('功能暂不可用', 'error');
-                });
-            }
-            if (importChatBtnDm) {
-                importChatBtnDm.addEventListener('click', () => {
-                    const inp = document.createElement('input');
-                    inp.type = 'file'; inp.accept = '.json';
-                    inp.onchange = e => { if (e.target.files[0] && typeof importChatHistory === 'function') importChatHistory(e.target.files[0]); };
-                    inp.click();
-                });
-            }
+            
 
 
             document.querySelectorAll('.theme-color-btn').forEach(btn => {
