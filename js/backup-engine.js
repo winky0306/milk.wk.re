@@ -511,7 +511,11 @@
             var targetLsKey = needRemap ? remapLfKey(k, backupSid, curSid, appPfx) : k;
             try {
                 var lsv = processLocalStorageValueForImport(lsRaw[k], mediaStore);
-                if (typeof lsv === 'string' && lsv.indexOf('data:image/') === 0 && lsv.length > 2000) continue;
+                // ⭐ 新增：如果是超大图片（超过 200KB 的 base64），就跳过，不存 localStorage
+                if (typeof lsv === 'string' && lsv.length > 200000 && lsv.startsWith('data:image/')) {
+                    console.warn('[backup] 跳过超大图片，避免 localStorage 超限:', targetLsKey);
+                    continue;   // 跳过这一条，不保存到 localStorage
+                }
                 localStorage.setItem(targetLsKey, lsv);
             } catch (e2) {
                 console.warn('[backup] localStorage 恢复失败', targetLsKey, e2);
