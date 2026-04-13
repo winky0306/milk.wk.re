@@ -34,13 +34,26 @@ function loadGroupChatSettings() {
     });
 }
 
+// group-chat.js 中找到 getGroupChatSettings 函数，替换为：
+
 function getGroupChatSettings() {
     try {
         const key = getGroupChatStorageKey();
         const saved = JSON.parse(localStorage.getItem(key) || 'null');
-        if (!saved) return { enabled: false, showAvatar: true, showName: true, members: [] };
-        if (!saved.members) saved.members = [];
-        return saved;
+        // 提供完整的默认值，确保 showName 始终为 true
+        const defaults = {
+            enabled: false,
+            showAvatar: true,
+            showName: true,
+            members: []
+        };
+        if (!saved) return defaults;
+        return {
+            enabled: saved.enabled ?? false,
+            showAvatar: saved.showAvatar ?? true,
+            showName: saved.showName ?? true,
+            members: saved.members || []
+        };
     } catch (e) {
         return { enabled: false, showAvatar: true, showName: true, members: [] };
     }
@@ -305,12 +318,45 @@ window.saveGroupMember = function () {
     var name = (document.getElementById('group-member-name-input').value || '').trim();
     if (!name) { alert('请输入成员名字'); return; }
     var idxVal = document.getElementById('group-member-edit-index').value;
-    var member = { name: name, avatar: _groupMemberAvatarDataUrl };
+    var newAvatar = _groupMemberAvatarDataUrl;
+
     if (idxVal !== '') {
-        groupChatSettings.members[parseInt(idxVal)] = member;
+        // 编辑已有成员：直接修改原对象，保留 id 和原有头像存储键
+        var existingMember = groupChatSettings.members[parseInt(idxVal)];
+        if (existingMember) {
+            existingMember.name = name;
+            // 仅当头像变化时才更新
+            if (newAvatar !== existingMember.avatar) {
+                existingMember.avatar = newAvatar;
+                // 更新本地存储中的头像数据
+                if (newAvatar) {
+                    var storageKey = getGroupChatStorageKey();
+                    var avatarRef = storageKey + '_avatar_' + existingMember.id;
+                    localforage.setItem(avatarRef, newAvatar).catch(e => console.warn('保存头像失败', e));
+                } else {
+                    // 如果清除了头像，删除旧的头像存储
+                    var storageKey = getGroupChatStorageKey();
+                    var avatarRef = storageKey + '_avatar_' + existingMember.id;
+                    localforage.removeItem(avatarRef).catch(e => console.warn('删除头像失败', e));
+                }
+            }
+        }
     } else {
+        // 添加新成员：创建完整对象，包含唯一 id
+        var newId = 'gcm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+        var newMember = {
+            id: newId,
+            name: name,
+            avatar: newAvatar
+        };
         if (!groupChatSettings.members) groupChatSettings.members = [];
-        groupChatSettings.members.push(member);
+        groupChatSettings.members.push(newMember);
+        // 保存新头像到本地存储
+        if (newAvatar) {
+            var storageKey = getGroupChatStorageKey();
+            var avatarRef = storageKey + '_avatar_' + newId;
+            localforage.setItem(avatarRef, newAvatar).catch(e => console.warn('保存头像失败', e));
+        }
     }
     saveGroupChatSettings();
     renderGroupMembersList();

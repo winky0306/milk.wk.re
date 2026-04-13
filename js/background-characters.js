@@ -59,16 +59,29 @@ window.startBackgroundCharacters = async function () {
 };
 
 async function maybeAutoSendMessageForCharacter(char) {
+    // 1. 获取角色的聊天设置
     let charSettings = await localforage.getItem(`${APP_PREFIX}${char.id}_chatSettings`);
     if (!charSettings) {
         charSettings = JSON.parse(JSON.stringify(settings));
         await localforage.setItem(`${APP_PREFIX}${char.id}_chatSettings`, charSettings);
     }
+
+    // 2. 修复类型问题（避免存成了字符串）
+    if (typeof charSettings.autoSendEnabled === 'string') {
+        charSettings.autoSendEnabled = charSettings.autoSendEnabled === 'true';
+    }
+    if (typeof charSettings.autoSendInterval === 'string') {
+        charSettings.autoSendInterval = Number(charSettings.autoSendInterval);
+    }
+
     if (!charSettings.autoSendEnabled) return;
 
     const lastAutoSendKey = `${APP_PREFIX}${char.id}_lastAutoSendTime`;
     let lastTime = await localforage.getItem(lastAutoSendKey) || 0;
-    const intervalMs = (charSettings.autoSendInterval || 5) * 60 * 1000;
+    let intervalVal = charSettings.autoSendInterval;
+    if (typeof intervalVal !== 'number') intervalVal = Number(intervalVal);
+    if (isNaN(intervalVal)) intervalVal = 5;
+    const intervalMs = intervalVal * 60 * 1000;
     if (Date.now() - lastTime < intervalMs) return;
 
     const replyText = await generateReplyForCharacter(char, []);
