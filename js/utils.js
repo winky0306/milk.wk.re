@@ -1,4 +1,60 @@
-        function safeGetItem(key) {
+
+// 放在 utils.js 或 backup-engine.js 中
+function convertOldBackupToCurrentFormat(oldBackup, targetCharacterId) {
+    // 旧备份格式可能是 v4/v5，也可能直接是 { messages, settings, ... }
+    const converted = {
+        type: 'chatapp-backup-v5',
+        formatVersion: 5,
+        appName: 'ChatApp',
+        timestamp: new Date().toISOString(),
+        sessionId: targetCharacterId,
+        appPrefix: APP_PREFIX,
+        modules: { inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true, inclThemes: true, inclDg: true, inclStickers: false },
+        localforage: {},
+        localStorage: {},
+        mediaStore: oldBackup.mediaStore || {},
+        mediaIndex: oldBackup.mediaIndex || {}
+    };
+
+    // 将旧 indexedDB/localforage 数据重新映射到新角色前缀
+    const oldLf = oldBackup.localforage || oldBackup.indexedDB || {};
+    for (const [key, value] of Object.entries(oldLf)) {
+        // 移除旧前缀，加上新角色前缀
+        let newKey = key;
+        if (key.startsWith(APP_PREFIX)) {
+            const parts = key.split('_');
+            if (parts.length >= 3) {
+                // 旧格式: CHAT_APP_V3_<oldSessionId>_chatMessages
+                // 改为: CHAT_APP_V3_<targetCharacterId>_chatMessages
+                parts[2] = targetCharacterId;
+                newKey = parts.join('_');
+            }
+        }
+        converted.localforage[newKey] = value;
+    }
+
+    // 处理 localStorage 中的群聊设置等
+    const oldLs = oldBackup.localStorage || {};
+    for (const [key, value] of Object.entries(oldLs)) {
+        let newKey = key;
+        if (key.startsWith('groupChatSettings')) {
+            // 将旧群聊设置绑定到当前角色
+            newKey = `groupChatSettings_${targetCharacterId}`;
+        }
+        converted.localStorage[newKey] = value;
+    }
+
+    // 确保必要的字段存在（如 customEmojiGroups, customStickerGroups）
+    if (!converted.localforage[`${APP_PREFIX}${targetCharacterId}_customEmojiGroups`]) {
+        converted.localforage[`${APP_PREFIX}${targetCharacterId}_customEmojiGroups`] = [];
+    }
+    if (!converted.localforage[`${APP_PREFIX}${targetCharacterId}_customStickerGroups`]) {
+        converted.localforage[`${APP_PREFIX}${targetCharacterId}_customStickerGroups`] = [];
+    }
+
+    return converted;
+}
+function safeGetItem(key) {
             try { return localStorage.getItem(key); }
             catch (e) { console.error('Error getting item:', e); return null; }
         }
@@ -353,32 +409,56 @@ function applyGlobalThemeCss(cssCode) {
 }
 
 async function exportAllData() {
-    try {
-        if (typeof ChatBackup !== 'undefined' && ChatBackup.buildBackupPayload && ChatBackup.serializeBackupV4) {
-            const payload = await ChatBackup.buildBackupPayload({
-                inclMsgs: true,
-                inclSet: true,
-                inclCustom: true,
-                inclAnn: true,
-                inclThemes: true,
-                inclDg: true,
-                inclStickers: true
-            });
-            const jsonString = ChatBackup.serializeBackupV4(payload);
-            const dateStr = new Date().toISOString().slice(0, 10);
-            const fileName = `chatapp-backup-${dateStr}.json`;
-            const blob = new Blob([jsonString], { type: 'application/json;charset=utf-8' });
-            downloadFileFallback(blob, fileName);
-            if (typeof showNotification === 'function') showNotification('已导出 JSON 备份', 'success');
-        } else {
-            showNotification('备份模块或函数未加载，请刷新页面', 'error');
-        }
-    } catch (e) {
-        console.error('全量导出失败:', e);
-        showNotification('全量导出失败，请重试', 'error');
+    // 询问导出范围
+    const scope = confirm('导出全部角色数据？\n点击“确定”导出所有角色，点击“取消”仅导出当前角色');
+    let payload;
+    if (scope) {
+        // 导出所有角色：遍历 CHARACTER_LIST，合并每个角色的数据
+        payload = await buildFullBackupForAllCharacters();
+    } else {
+        payload = await ChatBackup.buildBackupPayload({
+            inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
+            inclThemes: true, inclDg: true, inclStickers: true
+        });
     }
+    // 序列化并下载...
 }
 
+async function buildFullBackupForAllCharacters() {
+    const allData = {
+        type: 'chatapp-backup-v5-multi',
+        formatVersion: 5,
+        characters: [],
+        global: {}
+    };
+    for (const char of CHARACTER_LIST) {
+        const charData = await ChatBackup.buildBackupPayload({
+            inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
+            inclThemes: true, inclDg: true, inclStickers: true
+        });
+        // 将当前角色的存储键重新映射为不带角色前缀的相对键
+        const remapped = {};
+        for (const [key, val] of Object.entries(charData.localforage)) {
+            const relativeKey = key.replace(`${APP_PREFIX}${char.id}_`, '');
+            remapped[relativeKey] = val;
+        }
+        allData.characters.push({
+            id: char.id,
+            name: char.name,
+            avatar: char.avatar,
+            data: remapped,
+            localStorage: charData.localStorage
+        });
+    }
+    // 保存全局数据（主题方案、角色列表等）
+    allData.global = {
+        customThemes: customThemes,
+        themeSchemes: themeSchemes,
+        characterList: CHARACTER_LIST.map(c => ({ id: c.id, name: c.name, avatar: c.avatar })),
+        currentCharacterId: CURRENT_CHARACTER_ID
+    };
+    return allData;
+}
 async function importAllData(file) {
     if (!file) return;
     if (file.size > 220 * 1024 * 1024) {
@@ -390,7 +470,18 @@ async function importAllData(file) {
             showNotification('备份模块未加载，请刷新页面重试', 'error');
             return;
         }
+
+        // ⭐ 关键：解析备份文件得到 data 对象
         const data = await ChatBackup.loadBackupFromFile(file);
+
+        // ⭐ 检测是否为旧的多会话备份
+        const isLegacyMultiSession = detectLegacyMultiSessionBackup(data);
+        if (isLegacyMultiSession) {
+            await importLegacyMultiSessionBackup(data);
+            return;
+        }
+
+        // 以下是原有的全量备份导入逻辑
         const fullLike = ChatBackup.isFullBackupShape
             ? ChatBackup.isFullBackupShape(data)
             : (
@@ -467,13 +558,13 @@ async function importAllData(file) {
                     <div style="font-size:16px;font-weight:800;color:var(--text-primary);margin-bottom:10px;">全量恢复：选择要导入的部分</div>
                     <div style="display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto;padding-right:6px;">
                         ${categories.map(c => {
-                            return `
+                return `
                                 <label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 12px;border:1.5px solid var(--border-color);border-radius:16px;background:var(--primary-bg);">
                                     <span style="font-size:13px;font-weight:700;color:var(--text-primary);">${c.label}</span>
                                     <input type="checkbox" data-cat="${c.id}" checked style="transform:scale(1.1);accent-color:var(--accent-color);">
                                 </label>
                             `;
-                        }).join('')}
+            }).join('')}
                     </div>
                     <div style="display:flex;gap:10px;margin-top:14px;">
                         <button id="full-imp-cancel" class="modal-btn modal-btn-secondary" style="flex:1;padding:12px 0;">取消</button>
@@ -482,7 +573,7 @@ async function importAllData(file) {
                 </div>
             `;
             document.body.appendChild(overlay);
-            
+
             overlay.addEventListener('click', (ev) => { if (ev.target === overlay) { overlay.remove(); resolve(null); } });
             const fullImpCancelBtn = document.getElementById('full-imp-cancel');
             const fullImpConfirmBtn = document.getElementById('full-imp-confirm');
@@ -513,7 +604,7 @@ async function importAllData(file) {
                 hash: await calcTextSha256(importedJson),
                 source: 'import-json'
             });
-        } catch (metaErr) {}
+        } catch (metaErr) { }
         showNotification('恢复完成，即将刷新页面…', 'success', 2000);
         setTimeout(() => location.reload(), 2200);
     } catch (err) {
@@ -522,7 +613,6 @@ async function importAllData(file) {
         showNotification('导入失败：' + msg, 'error', 5000);
     }
 }
-
 const CLOUD_SYNC_META_KEY = 'CHATAPP_CLOUD_SYNC_META_V1';
 const CLOUD_SYNC_CONFIG_KEY = 'CHATAPP_SUPABASE_CONFIG_V1';
 const CLOUD_SYNC_SINGLE_BACKUP_ID = 'SINGLE_USER_BACKUP';
@@ -1186,3 +1276,179 @@ document.addEventListener('DOMContentLoaded', function() {
         if (window.supabase) refreshCloudSyncInfo();
     }, 800);
 });
+function getMessagePreview(text, hasImage = false) {
+    if (text && typeof text === 'string') {
+        const trimmed = text.trim();
+        if (trimmed.length > 30) {
+            return trimmed.slice(0, 30) + '…';
+        }
+        return trimmed;
+    } else if (hasImage) {
+        return '[图片]';
+    }
+    return '';
+}
+// ==================== 旧备份导入支持（多会话 → 多角色） ====================
+
+// 检测是否为旧的多会话备份
+function detectLegacyMultiSessionBackup(data) {
+    // 检查是否包含 sessionList
+    if (data.sessionList && Array.isArray(data.sessionList) && data.sessionList.length > 0) {
+        return true;
+    }
+    // 检查 indexedDB/localforage 中是否包含多个不同的会话前缀
+    const lfData = data.localforage || data.indexedDB || {};
+    const sessionIds = new Set();
+    const prefix = data.appPrefix || (typeof APP_PREFIX !== 'undefined' ? APP_PREFIX : 'CHAT_APP_V3_');
+    for (const key of Object.keys(lfData)) {
+        if (key.startsWith(prefix)) {
+            const after = key.slice(prefix.length);
+            const underscoreIndex = after.indexOf('_');
+            if (underscoreIndex > 0) {
+                const sid = after.slice(0, underscoreIndex);
+                if (sid && sid.length > 5) sessionIds.add(sid);
+            }
+        }
+    }
+    return sessionIds.size > 1;
+}
+
+// 从备份中推断会话列表（当没有 sessionList 时）
+function inferSessionsFromBackup(data) {
+    const lfData = data.localforage || data.indexedDB || {};
+    const sessions = new Map();
+    const prefix = data.appPrefix || (typeof APP_PREFIX !== 'undefined' ? APP_PREFIX : 'CHAT_APP_V3_');
+    for (const key of Object.keys(lfData)) {
+        if (key.startsWith(prefix) && key.includes('_chatMessages')) {
+            const after = key.slice(prefix.length);
+            const underscoreIndex = after.indexOf('_');
+            if (underscoreIndex > 0) {
+                const sid = after.slice(0, underscoreIndex);
+                if (!sessions.has(sid)) {
+                    sessions.set(sid, {
+                        id: sid,
+                        name: `会话 ${sessions.size + 1}`,
+                        createdAt: Date.now()
+                    });
+                }
+            }
+        }
+    }
+    // 尝试从 chatSettings 中获取更友好的名称
+    for (const key of Object.keys(lfData)) {
+        if (key.includes('_chatSettings')) {
+            const match = key.match(new RegExp(`${prefix}([^_]+)_chatSettings`));
+            if (match) {
+                const sid = match[1];
+                const settings = lfData[key];
+                if (settings && settings.partnerName && sessions.has(sid)) {
+                    sessions.get(sid).name = settings.partnerName;
+                }
+            }
+        }
+    }
+    return Array.from(sessions.values());
+}
+
+// 将备份中的单个会话数据导入到指定角色
+async function importSessionToCharacter(charId, sessionId, lfData, lsData, mediaStore, appPrefix) {
+    const oldPrefix = `${appPrefix}${sessionId}_`;
+    const newPrefix = `${APP_PREFIX}${charId}_`;
+    // 迁移 indexedDB 数据
+    for (const [key, value] of Object.entries(lfData)) {
+        if (key.startsWith(oldPrefix)) {
+            const newKey = key.replace(oldPrefix, newPrefix);
+            // 处理媒体内嵌（如果有 mediaStore）
+            let processedValue = value;
+            if (mediaStore && typeof ChatBackup !== 'undefined' && ChatBackup.inlineMediaTree) {
+                processedValue = ChatBackup.inlineMediaTree(value, mediaStore);
+            }
+            await localforage.setItem(newKey, processedValue);
+        }
+    }
+    // 迁移 localStorage 中的群聊设置
+    const groupKey = `groupChatSettings_${sessionId}`;
+    if (lsData && lsData[groupKey]) {
+        localStorage.setItem(`groupChatSettings_${charId}`, lsData[groupKey]);
+    }
+    console.log(`[导入] 会话 ${sessionId} → 角色 ${charId}`);
+}
+
+// 导入旧的多会话备份，为每个会话创建角色
+async function importLegacyMultiSessionBackup(data) {
+    if (typeof showNotification === 'function') {
+        showNotification('检测到旧版备份，正在为每个会话创建角色...', 'info', 3000);
+    }
+    // 获取会话列表
+    let sessionList = data.sessionList || [];
+    if (sessionList.length === 0) {
+        sessionList = inferSessionsFromBackup(data);
+    }
+    if (sessionList.length === 0) {
+        showNotification('无法识别备份中的会话结构', 'error');
+        return;
+    }
+    // 获取现有角色
+    let existingCharacters = [];
+    try {
+        existingCharacters = await localforage.getItem(`${APP_PREFIX}character_list`) || [];
+    } catch (e) { }
+    const newCharacters = [];
+    const lfData = data.localforage || data.indexedDB || {};
+    const lsData = data.localStorage || {};
+    const mediaStore = data.mediaStore || {};
+    const appPrefix = data.appPrefix || (typeof APP_PREFIX !== 'undefined' ? APP_PREFIX : 'CHAT_APP_V3_');
+    for (const session of sessionList) {
+        const sessionId = session.id;
+        // 检查是否已存在同名或同ID角色
+        const exists = existingCharacters.some(c =>
+            c.name === session.name ||
+            (c.legacySessionId === sessionId)
+        );
+        if (exists) {
+            const shouldOverwrite = confirm(`会话“${session.name}”已存在，是否覆盖其数据？`);
+            if (shouldOverwrite) {
+                const targetChar = existingCharacters.find(c =>
+                    c.name === session.name || c.legacySessionId === sessionId
+                );
+                if (targetChar) {
+                    await importSessionToCharacter(targetChar.id, sessionId, lfData, lsData, mediaStore, appPrefix);
+                }
+            }
+            continue;
+        }
+        // 创建新角色
+        const newCharId = `char_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const newChar = {
+            id: newCharId,
+            name: session.name + (session.name === '梦角' ? '' : ' (导入)'),
+            avatar: null,
+            createdAt: session.createdAt || Date.now(),
+            legacySessionId: sessionId,
+            unreadCount: 0,
+            lastMessage: '',
+            lastTimestamp: null,
+            doNotDisturb: false
+        };
+        await importSessionToCharacter(newCharId, sessionId, lfData, lsData, mediaStore, appPrefix);
+        newCharacters.push(newChar);
+    }
+    // 合并角色列表
+    const allCharacters = [...existingCharacters, ...newCharacters];
+    await localforage.setItem(`${APP_PREFIX}character_list`, allCharacters);
+    // 询问是否切换到导入的第一个角色
+    if (newCharacters.length > 0) {
+        const switchNow = confirm(`成功导入 ${newCharacters.length} 个角色！是否立即切换到第一个角色？`);
+        if (switchNow) {
+            await localforage.setItem(`${APP_PREFIX}current_character`, newCharacters[0].id);
+            showNotification('即将刷新页面...', 'info', 1500);
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showNotification(`已导入 ${newCharacters.length} 个角色，可在角色管理中查看`, 'success');
+        }
+    } else {
+        showNotification('没有需要导入的新角色', 'info');
+    }
+}
+
+// =========================================================================

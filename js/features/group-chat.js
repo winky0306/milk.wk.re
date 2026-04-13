@@ -1,4 +1,5 @@
-window.switchStatsTab = function(tab) {
+
+window.switchStatsTab = function (tab) {
     var statsPanel = document.getElementById('stats-panel');
     var favoritesPanel = document.getElementById('favorites-panel');
     var searchPanel = document.getElementById('search-panel');
@@ -32,14 +33,23 @@ window.switchStatsTab = function(tab) {
     }
 };
 
-var groupChatSettings = (function() {
+function getGroupChatStorageKey() {
+    if (typeof CURRENT_CHARACTER_ID !== 'undefined' && CURRENT_CHARACTER_ID) {
+        return `groupChatSettings_${CURRENT_CHARACTER_ID}`;
+    }
+    return 'groupChatSettings';
+}
+
+var groupChatSettings = (function () {
     try {
-        var saved = JSON.parse(localStorage.getItem('groupChatSettings') || 'null');
+        var key = getGroupChatStorageKey();
+        var saved = JSON.parse(localStorage.getItem(key) || 'null');
         if (!saved) return { enabled: false, showAvatar: true, showName: true, members: [] };
         if (!saved.members) saved.members = [];
         return saved;
-    } catch(e) { return { enabled: false, showAvatar: true, showName: true, members: [] }; }
+    } catch (e) { return { enabled: false, showAvatar: true, showName: true, members: [] }; }
 })();
+
 (function loadGroupAvatars() {
     if (!window.localforage) return;
     var members = groupChatSettings.members || [];
@@ -56,20 +66,26 @@ var groupChatSettings = (function() {
 })();
 var _groupMemberAvatarDataUrl = null;
 
+function getGroupChatStorageKey() {
+    if (!CURRENT_CHARACTER_ID) return 'groupChatSettings';
+    return `groupChatSettings_${CURRENT_CHARACTER_ID}`;
+}
+
+// 保存群聊设置
 function saveGroupChatSettings() {
     var members = groupChatSettings.members || [];
     var toSave = {
         enabled: groupChatSettings.enabled,
         showAvatar: groupChatSettings.showAvatar,
         showName: groupChatSettings.showName,
-        members: members.map(function(m) {
-            if (!m.id) m.id = 'gcm_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+        members: members.map(function (m) {
+            if (!m.id) m.id = 'gcm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
             return { name: m.name, id: m.id, avatarRef: 'gca_' + m.id };
         })
     };
     try {
-        localStorage.setItem('groupChatSettings', JSON.stringify(toSave));
-    } catch(e) {
+        localStorage.setItem(getGroupChatStorageKey(), JSON.stringify(toSave));
+    } catch (e) {
         console.warn('groupChatSettings localStorage保存失败:', e);
     }
     if (window.localforage) {

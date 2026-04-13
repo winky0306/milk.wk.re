@@ -47,7 +47,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         updateLoader('正在建立安全连接...', '10%');
-        await safeAwait(initializeSession());
+        await safeAwait(initCharacterSystem());
 
         updateLoader('正在读取记忆存档...', '40%');
         await safeAwait(loadData());
@@ -76,6 +76,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     }, { once: true });
                 }
             }
+        }
+        // 启动后台角色处理（每30秒检查所有角色）
+        if (typeof window.startBackgroundCharacters === 'function') {
+            window.startBackgroundCharacters();
         }
 
         updateLoader('连接成功，欢迎回来。', '100%');

@@ -332,7 +332,7 @@ if (target.classList.contains('delete-btn')) {
 
 
         function initHeaderAndSettingsListeners() {
-
+            
             const openNameModal = (isPartner) => {
                 const modal = DOMElements.editModal;
                 showModal(modal.modal, modal.input);
@@ -2785,5 +2785,18 @@ function toggleBatchFavoriteMode() {
         hideBatchFavoriteActions();
         selectedMessages = [];
         renderMessages(true);
+    }
+}
+
+// 添加一个辅助函数（放在文件合适位置）
+async function syncCurrentCharacterToCharacterList() {
+    if (!CURRENT_CHARACTER_ID) return;
+    const character = CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID);
+    if (character) {
+        character.name = settings.partnerName;
+        const avatarImg = DOMElements.partner.avatar.querySelector('img');
+        if (avatarImg) character.avatar = avatarImg.src;
+        await saveCharacterList();
+        renderCharacterList(); // 如果角色列表打开则刷新
     }
 }

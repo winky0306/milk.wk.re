@@ -479,6 +479,7 @@ function _renderModernToolbar() {
             </button>
             <button class="toolbar-icon-btn" id="tb-export-btn" title="导出">
                 ${ICONS.export}
+                <button class="toolbar-icon-btn" id="tb-import-other-role" title="从其他角色导入"><i class="fas fa-copy"></i></button>
             </button>
         </div>
 
@@ -647,6 +648,93 @@ function _renderModernToolbar() {
                 }
             };
         }
+          
+
+    }
+    // 从其他角色导入按钮（始终可用）
+    const importOtherRoleBtn = toolbar.querySelector('#tb-import-other-role');
+    if (importOtherRoleBtn) {
+        importOtherRoleBtn.onclick = async () => {
+            // 获取角色列表
+            if (typeof CHARACTER_LIST === 'undefined' || !CHARACTER_LIST.length) {
+                showNotification('未检测到其他角色，请先在角色管理中创建', 'warning');
+                return;
+            }
+            const otherRoles = CHARACTER_LIST.filter(c => c.id !== CURRENT_CHARACTER_ID);
+            if (otherRoles.length === 0) {
+                showNotification('没有其他角色可导入', 'info');
+                return;
+            }
+
+            // 弹出角色选择器
+            const overlay = _makeOverlay();
+            const panel = document.createElement('div');
+            panel.style.cssText = `background:var(--secondary-bg);border-radius:22px;padding:20px;width:92%;max-width:340px;box-shadow:0 20px 60px rgba(0,0,0,0.45);`;
+            panel.innerHTML = `
+            <div style="font-size:15px;font-weight:700;margin-bottom:12px;">从其他角色导入字卡</div>
+            <div id="other-role-list" style="max-height:300px;overflow-y:auto;margin-bottom:16px;"></div>
+            <div style="display:flex;gap:8px;">
+                <button id="cancel-import-other" class="modal-btn modal-btn-secondary" style="flex:1;">取消</button>
+                <button id="confirm-import-other" class="modal-btn modal-btn-primary" style="flex:2;">下一步</button>
+            </div>
+        `;
+            const listDiv = panel.querySelector('#other-role-list');
+            let selectedRoleId = null;
+
+            otherRoles.forEach(role => {
+                const item = document.createElement('div');
+                item.className = 'import-role-item';
+                item.style.cssText = `display:flex;align-items:center;gap:10px;padding:10px;border:1px solid var(--border-color);border-radius:12px;margin-bottom:8px;cursor:pointer;transition:all 0.2s;`;
+                item.innerHTML = `
+                <div style="width:36px;height:36px;border-radius:50%;background:var(--border-color);overflow:hidden;display:flex;align-items:center;justify-content:center;">
+                    ${role.avatar ? `<img src="${role.avatar}" style="width:100%;height:100%;object-fit:cover;">` : '<i class="fas fa-user"></i>'}
+                </div>
+                <div style="flex:1;font-weight:600;">${role.name}</div>
+            `;
+                item.addEventListener('click', () => {
+                    document.querySelectorAll('.import-role-item').forEach(i => i.style.borderColor = 'var(--border-color)');
+                    item.style.borderColor = 'var(--accent-color)';
+                    selectedRoleId = role.id;
+                });
+                listDiv.appendChild(item);
+            });
+
+            overlay.appendChild(panel);
+            document.body.appendChild(overlay);
+            overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+            panel.querySelector('#cancel-import-other').onclick = () => overlay.remove();
+            panel.querySelector('#confirm-import-other').onclick = async () => {
+                if (!selectedRoleId) { showNotification('请先选择一个角色', 'warning'); return; }
+                overlay.remove();
+
+                // 读取目标角色的字卡数据
+                try {
+                    const targetReplies = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customReplies`) || [];
+                    const targetGroups = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customReplyGroups`) || [];
+                    const targetEmojis = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customEmojis`) || [];
+                    const targetPokes = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customPokes`) || [];
+                    const targetStatuses = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customStatuses`) || [];
+                    const targetMottos = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customMottos`) || [];
+                    const targetIntros = await localforage.getItem(`${APP_PREFIX}${selectedRoleId}_customIntros`) || [];
+
+                    const importData = {
+                        customReplies: targetReplies,
+                        customReplyGroups: targetGroups,
+                        customEmojis: targetEmojis,
+                        customPokes: targetPokes,
+                        customStatuses: targetStatuses,
+                        customMottos: targetMottos,
+                        customIntros: targetIntros
+                    };
+
+                    // 调用现有的导入选择界面
+                    _showImportUI(importData);
+                } catch (err) {
+                    console.error('读取目标角色数据失败', err);
+                    showNotification('读取数据失败，请重试', 'error');
+                }
+            };
+        };
     }
 }
 

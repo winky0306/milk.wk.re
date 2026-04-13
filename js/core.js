@@ -1,5 +1,40 @@
 /*核心应用逻辑：数据加载保存、消息渲染、会话管理等*/
 
+// 在 loadData() 函数的最开始添加
+async function migrateOldDataToCurrentRole() {
+    if (!CURRENT_CHARACTER_ID) return;
+    const oldKeys = await localforage.keys();
+    const oldPrefix = APP_PREFIX; // 如 "CHAT_APP_V3_"
+    const newPrefix = `${APP_PREFIX}${CURRENT_CHARACTER_ID}_`;
+
+    for (const key of oldKeys) {
+        // 跳过已经带有角色前缀的键、会话列表、全局主题等
+        if (key.startsWith(newPrefix)) continue;
+        if (key === `${APP_PREFIX}sessionList` ||
+            key === `${APP_PREFIX}lastSessionId` ||
+            key === `${APP_PREFIX}customThemes` ||
+            key === `${APP_PREFIX}themeSchemes` ||
+            key === `${APP_PREFIX}character_list` ||
+            key === `${APP_PREFIX}current_character`) continue;
+
+        // 仅迁移属于旧会话（没有角色前缀）的键
+        if (key.startsWith(oldPrefix) && !key.includes('_chatMessages')) {
+            // 旧版存储格式：CHAT_APP_V3_xxx_...，我们需要提取基础键名
+            const baseKey = key.replace(oldPrefix, '');
+            const newKey = `${newPrefix}${baseKey}`;
+            const oldValue = await localforage.getItem(key);
+            if (oldValue !== null && oldValue !== undefined) {
+                await localforage.setItem(newKey, oldValue);
+                console.log(`[迁移] ${key} → ${newKey}`);
+                // 迁移后可选择删除旧键（保守起见暂不删除，待确认后再手动清除）
+                // await localforage.removeItem(key);
+            }
+        }
+    }
+    // 标记迁移完成
+    await localforage.setItem(`${APP_PREFIX}data_migrated_v2`, true);
+}
+
         function clearAllAppData() {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.6);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;animation:fadeIn 0.2s ease;';
@@ -172,7 +207,8 @@ function loadMoreHistory() {
 autoSendEnabled: false,
 autoSendInterval: 5,
 autoEnvelopeEnabled: false,   // 是否开启梦角主动写信
-autoEnvelopeInterval: 5,      // 主动写信间隔（分钟）
+                autoEnvelopeInterval: 5,      // 主动写信间隔（分钟）
+                autoReplyEnabled: true,
         allowReadNoReply: false, 
         readNoReplyChance: 0.2,
         timeFormat: 'HH:mm',
@@ -284,9 +320,17 @@ autoEnvelopeInterval: 5,      // 主动写信间隔（分钟）
 
 
 const loadData = async () => {
+    // ========== 自动迁移旧会话数据到角色（只执行一次） ==========
+    const MIGRATION_KEY = APP_PREFIX + 'legacy_migration_v2_done';
+    const migrationDone = await localforage.getItem(MIGRATION_KEY);
+    if (!migrationDone) {
+        await migrateLegacyDataToCharacters();
+        await localforage.setItem(MIGRATION_KEY, true);
+    }
+    // ========================================================
     try {
         settings = getDefaultSettings();
-
+        await migrateOldDataToCurrentRole();
         
         const results = await Promise.allSettled([
             localforage.getItem(getStorageKey('chatSettings')),
@@ -351,6 +395,10 @@ const loadData = async () => {
             window.customStickerGroups = window.customStickerGroups || [];
         }
 
+        // 确保全局变量始终为数组
+        window.customEmojiGroups = Array.isArray(window.customEmojiGroups) ? window.customEmojiGroups : [];
+        window.customStickerGroups = Array.isArray(window.customStickerGroups) ? window.customStickerGroups : [];
+
         if (results[19] && results[19].status === 'fulfilled' && results[19].value) {
             customEmojiGroups = results[19].value;
         }
@@ -363,7 +411,16 @@ const loadData = async () => {
 
         if (savedPartnerPersonas) partnerPersonas = savedPartnerPersonas;
 
-        if (savedSettings) Object.assign(settings, savedSettings);
+        if (savedSettings) {
+            const defaultSettings = getDefaultSettings();
+            // 补齐缺失字段
+            for (const key in defaultSettings) {
+                if (savedSettings[key] === undefined) {
+                    savedSettings[key] = defaultSettings[key];
+                }
+            }
+            Object.assign(settings, savedSettings);
+        }
 
         if (settings.showPartnerNameInChat !== undefined) {
             showPartnerNameInChat = settings.showPartnerNameInChat;
@@ -587,8 +644,8 @@ function _tryRecoverFromBackup() {
 }
 
 const saveData = async () => {
-    if (!SESSION_ID) {
-        console.warn('[saveData] SESSION_ID 尚未初始化，跳过保存以防数据写入临时 key');
+    if (!CURRENT_CHARACTER_ID) {
+        console.warn('[saveData] CURRENT_CHARACTER_ID 尚未初始化，跳过保存');
         return;
     }
 
@@ -1264,7 +1321,7 @@ function renderMessages(preserveScroll = false) {
     }
 }
 
-const addMessage = (message) => {
+const addMessage = async (message) => {
     if (!(message.timestamp instanceof Date)) message.timestamp = new Date(message.timestamp);
     
     const container = DOMElements.chatContainer;
@@ -1315,6 +1372,24 @@ const addMessage = (message) => {
     });
 
     throttledSaveData();
+    // 更新当前角色的最后消息预览（用于角色列表显示）
+    if (message.sender !== 'user' && message.type !== 'system' && message.type !== 'call-event') {
+        const currentChar = CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID);
+        if (currentChar) {
+            // 使用工具函数生成预览文本
+            const preview = getMessagePreview(message.text, !!message.image);
+            currentChar.lastMessage = preview;
+            currentChar.lastTimestamp = message.timestamp;
+            await saveCharacterList();
+            // 如果角色管理面板是打开的，实时刷新列表显示
+            if (document.getElementById('character-modal').style.display !== 'none') {
+                renderCharacterList();
+            }
+            // 更新总未读角标（当前角色未读不会增加，但为了同步角标）
+            updateCharacterTotalBadge();
+        }
+    }
+
 };
 
         window._addCallEvent = (icon, label, detail) => {
@@ -1815,6 +1890,7 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                     }
                 }, delay);
             }
+            window.simulateReply = window.simulateReply;
         }
 
 function showModal(modalElement, focusElement = null) {
@@ -2211,13 +2287,13 @@ if (customStatuses && customStatuses.length > 0) {
 
 
 
-        function getStorageKey(baseKey) {
-            if (!SESSION_ID) {
-                console.error('[getStorageKey] SESSION_ID 尚未初始化，拒绝生成存储键:', baseKey);
-                throw new Error('SESSION_ID 未初始化，存储操作已中止');
-            }
-            return `${APP_PREFIX}${SESSION_ID}_${baseKey}`;
-        }
+function getStorageKey(baseKey) {
+    if (!CURRENT_CHARACTER_ID) {
+        console.error('[getStorageKey] 角色ID尚未初始化，拒绝生成存储键:', baseKey);
+        throw new Error('角色ID未初始化，存储操作已中止');
+    }
+    return `${APP_PREFIX}${CURRENT_CHARACTER_ID}_${baseKey}`;
+}
 
         async function migrateData() {
             const isMigrated = await localforage.getItem(APP_PREFIX + 'MIGRATION_V2_DONE');
@@ -2289,6 +2365,55 @@ document.addEventListener('DOMContentLoaded', function() {
         observer.observe(historyLoader);
     }
 });
+
+// 初始化角色系统（替代原有的会话系统）
+async function initCharacterSystem() {
+    // 1. 加载角色列表
+    const savedChars = await localforage.getItem(`${APP_PREFIX}character_list`);
+    if (savedChars && Array.isArray(savedChars) && savedChars.length > 0) {
+        CHARACTER_LIST = savedChars;
+    } else {
+        // 首次使用：创建默认角色
+        const defaultId = 'char_' + Date.now();
+        // 从当前 settings 获取梦角名称（如果已存在）
+        let defaultName = '梦角';
+        if (typeof settings !== 'undefined' && settings.partnerName) {
+            defaultName = settings.partnerName;
+        }
+        CHARACTER_LIST = [{
+            id: defaultId,
+            name: defaultName,
+            avatar: null,
+            createdAt: Date.now()
+        }];
+        await localforage.setItem(`${APP_PREFIX}character_list`, CHARACTER_LIST);
+        if (savedChars && Array.isArray(savedChars) && savedChars.length > 0) {
+            CHARACTER_LIST = savedChars.map(char => ({
+                ...char,
+                unreadCount: char.unreadCount ?? 0,
+                lastMessage: char.lastMessage ?? '',
+                lastTimestamp: char.lastTimestamp ?? null,
+                doNotDisturb: char.doNotDisturb ?? false
+            }));
+        }
+
+    }
+
+    // 2. 确定当前角色ID
+    let storedCharId = await localforage.getItem(`${APP_PREFIX}current_character`);
+    if (!storedCharId || !CHARACTER_LIST.some(c => c.id === storedCharId)) {
+        storedCharId = CHARACTER_LIST[0].id;
+        await localforage.setItem(`${APP_PREFIX}current_character`, storedCharId);
+    }
+    CURRENT_CHARACTER_ID = storedCharId;
+
+    // 3. 同步 SESSION_ID 以兼容老代码（可选）
+    window.SESSION_ID = CURRENT_CHARACTER_ID;
+
+    console.log('[角色系统] 当前角色:', CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID)?.name);
+
+    window.SESSION_ID = CURRENT_CHARACTER_ID;
+}
 
 // ==================== 截图多选功能 ====================
 function toggleSnapshotMode() {
@@ -2710,3 +2835,103 @@ async function generateMessagesSnapshot() {
         if (isSnapshotMode) toggleSnapshotMode();
     }
 }
+// ==================== 旧会话迁移到角色（热更新时自动执行） ====================
+async function migrateLegacyDataToCharacters() {
+    console.log('[迁移] 开始检查旧数据...');
+
+    // 1. 获取所有旧会话ID（从 localforage 的 sessionList 或键名推断）
+    let oldSessionList = [];
+    try {
+        const saved = await localforage.getItem(`${APP_PREFIX}sessionList`);
+        if (saved && Array.isArray(saved)) oldSessionList = saved;
+    } catch (e) { }
+
+    // 如果没有旧会话，直接返回
+    if (oldSessionList.length === 0) {
+        console.log('[迁移] 未检测到旧会话数据');
+        return;
+    }
+
+    // 2. 获取现有角色列表（如果存在）
+    let existingCharacters = [];
+    try {
+        existingCharacters = await localforage.getItem(`${APP_PREFIX}character_list`) || [];
+    } catch (e) { }
+
+    // 3. 为每个旧会话创建角色
+    const newCharacters = [];
+    for (const session of oldSessionList) {
+        const sessionId = session.id;
+        // 检查该会话是否已经对应一个角色
+        const alreadyExists = existingCharacters.some(c =>
+            c.name === session.name ||
+            (c.legacySessionId === sessionId)
+        );
+
+        if (alreadyExists) {
+            console.log(`[迁移] 会话 "${session.name}" 已存在对应角色，跳过`);
+            continue;
+        }
+
+        // 创建新角色
+        const newCharId = `char_${Date.now()}_${sessionId.slice(-6)}`;
+        const newChar = {
+            id: newCharId,
+            name: session.name + (session.name === '梦角' ? '' : ' (旧存档)'),
+            avatar: null,
+            createdAt: session.createdAt || Date.now(),
+            legacySessionId: sessionId,
+            unreadCount: 0,
+            lastMessage: '',
+            lastTimestamp: null,
+            doNotDisturb: false
+        };
+
+        // 迁移该会话的所有数据到新角色前缀
+        const oldPrefix = `${APP_PREFIX}${sessionId}_`;
+        const newPrefix = `${APP_PREFIX}${newCharId}_`;
+
+        const allKeys = await localforage.keys();
+        for (const key of allKeys) {
+            if (key.startsWith(oldPrefix)) {
+                const value = await localforage.getItem(key);
+                const newKey = key.replace(oldPrefix, newPrefix);
+                await localforage.setItem(newKey, value);
+                console.log(`[迁移] ${key} → ${newKey}`);
+            }
+        }
+
+        // 迁移群聊设置（如果有）
+        const groupKey = `groupChatSettings_${sessionId}`;
+        const groupValue = localStorage.getItem(groupKey);
+        if (groupValue) {
+            localStorage.setItem(`groupChatSettings_${newCharId}`, groupValue);
+        }
+
+        newCharacters.push(newChar);
+    }
+
+    // 4. 合并角色列表并保存
+    const allCharacters = [...existingCharacters, ...newCharacters];
+    await localforage.setItem(`${APP_PREFIX}character_list`, allCharacters);
+
+    // 5. 设置当前角色（优先使用之前激活的会话，否则使用第一个）
+    let currentCharId = null;
+    const lastSessionId = await localforage.getItem(`${APP_PREFIX}lastSessionId`);
+    if (lastSessionId) {
+        const matchedChar = allCharacters.find(c => c.legacySessionId === lastSessionId);
+        if (matchedChar) currentCharId = matchedChar.id;
+    }
+    if (!currentCharId && allCharacters.length > 0) {
+        currentCharId = allCharacters[0].id;
+    }
+    if (currentCharId) {
+        await localforage.setItem(`${APP_PREFIX}current_character`, currentCharId);
+    }
+
+    console.log(`[迁移] 完成！创建了 ${newCharacters.length} 个新角色`);
+    if (typeof showNotification === 'function') {
+        showNotification(`已自动迁移 ${newCharacters.length} 个旧会话为独立角色`, 'info', 5000);
+    }
+}
+// =========================================================================

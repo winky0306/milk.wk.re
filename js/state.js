@@ -14,6 +14,9 @@ let isRangeSelectMode = false;    // 截图模式下的范围选择开关
 let rangeSelectStartId = null;    // 范围选择的起始消息ID
 let isBatchRangeSelectMode = false;   // 批量收藏模式下的范围选择开关
 let batchRangeStartId = null;         // 范围选择的起始消息ID
+// ========== 角色管理相关 ==========
+let CHARACTER_LIST = [];           // 角色列表 [{ id, name, avatar }]
+let CURRENT_CHARACTER_ID = null;   // 当前激活的角色ID
         let sessionList = [];
         let messages = [];
         let settings = {};
