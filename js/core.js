@@ -2838,100 +2838,90 @@ async function generateMessagesSnapshot() {
 // ==================== 旧会话迁移到角色（热更新时自动执行） ====================
 async function migrateLegacyDataToCharacters() {
     console.log('[迁移] 开始检查旧数据...');
-
-    // 1. 获取所有旧会话ID（从 localforage 的 sessionList 或键名推断）
-    let oldSessionList = [];
     try {
-        const saved = await localforage.getItem(`${APP_PREFIX}sessionList`);
-        if (saved && Array.isArray(saved)) oldSessionList = saved;
-    } catch (e) { }
+        // 1. 获取旧会话列表
+        let oldSessionList = [];
+        try {
+            const saved = await localforage.getItem(`${APP_PREFIX}sessionList`);
+            if (saved && Array.isArray(saved)) oldSessionList = saved;
+        } catch (e) { console.warn('读取旧会话失败', e); }
 
-    // 如果没有旧会话，直接返回
-    if (oldSessionList.length === 0) {
-        console.log('[迁移] 未检测到旧会话数据');
-        return;
-    }
-
-    // 2. 获取现有角色列表（如果存在）
-    let existingCharacters = [];
-    try {
-        existingCharacters = await localforage.getItem(`${APP_PREFIX}character_list`) || [];
-    } catch (e) { }
-
-    // 3. 为每个旧会话创建角色
-    const newCharacters = [];
-    for (const session of oldSessionList) {
-        const sessionId = session.id;
-        // 检查该会话是否已经对应一个角色
-        const alreadyExists = existingCharacters.some(c =>
-            c.name === session.name ||
-            (c.legacySessionId === sessionId)
-        );
-
-        if (alreadyExists) {
-            console.log(`[迁移] 会话 "${session.name}" 已存在对应角色，跳过`);
-            continue;
+        // 没有旧会话则直接返回
+        if (oldSessionList.length === 0) {
+            console.log('[迁移] 未检测到旧会话数据');
+            return;
         }
 
-        // 创建新角色
-        const newCharId = `char_${Date.now()}_${sessionId.slice(-6)}`;
-        const newChar = {
-            id: newCharId,
-            name: session.name + (session.name === '梦角' ? '' : ' (旧存档)'),
-            avatar: null,
-            createdAt: session.createdAt || Date.now(),
-            legacySessionId: sessionId,
-            unreadCount: 0,
-            lastMessage: '',
-            lastTimestamp: null,
-            doNotDisturb: false
-        };
+        // 2. 获取现有角色列表
+        let existingCharacters = [];
+        try {
+            existingCharacters = await localforage.getItem(`${APP_PREFIX}character_list`) || [];
+        } catch (e) { console.warn('读取角色列表失败', e); }
 
-        // 迁移该会话的所有数据到新角色前缀
-        const oldPrefix = `${APP_PREFIX}${sessionId}_`;
-        const newPrefix = `${APP_PREFIX}${newCharId}_`;
+        let newCharacters = [];
+        for (const session of oldSessionList) {
+            const sessionId = session.id;
+            // 避免重复创建
+            const alreadyExists = existingCharacters.some(c => c.name === session.name || c.legacySessionId === sessionId);
+            if (alreadyExists) continue;
 
-        const allKeys = await localforage.keys();
-        for (const key of allKeys) {
-            if (key.startsWith(oldPrefix)) {
-                const value = await localforage.getItem(key);
-                const newKey = key.replace(oldPrefix, newPrefix);
-                await localforage.setItem(newKey, value);
-                console.log(`[迁移] ${key} → ${newKey}`);
+            const newCharId = `char_${Date.now()}_${sessionId.slice(-6)}`;
+            const newChar = {
+                id: newCharId,
+                name: session.name + (session.name === '梦角' ? '' : ' (旧存档)'),
+                avatar: null,
+                createdAt: session.createdAt || Date.now(),
+                legacySessionId: sessionId,
+                unreadCount: 0,
+                lastMessage: '',
+                lastTimestamp: null,
+                doNotDisturb: false
+            };
+
+            // 迁移该会话所有数据到新角色前缀
+            const oldPrefix = `${APP_PREFIX}${sessionId}_`;
+            const newPrefix = `${APP_PREFIX}${newCharId}_`;
+            const allKeys = await localforage.keys();
+            for (const key of allKeys) {
+                if (key.startsWith(oldPrefix)) {
+                    const value = await localforage.getItem(key);
+                    const newKey = key.replace(oldPrefix, newPrefix);
+                    await localforage.setItem(newKey, value);
+                    console.log(`[迁移] ${key} → ${newKey}`);
+                }
             }
+            // 迁移群聊设置
+            const groupKey = `groupChatSettings_${sessionId}`;
+            const groupValue = localStorage.getItem(groupKey);
+            if (groupValue) {
+                localStorage.setItem(`groupChatSettings_${newCharId}`, groupValue);
+            }
+            newCharacters.push(newChar);
         }
 
-        // 迁移群聊设置（如果有）
-        const groupKey = `groupChatSettings_${sessionId}`;
-        const groupValue = localStorage.getItem(groupKey);
-        if (groupValue) {
-            localStorage.setItem(`groupChatSettings_${newCharId}`, groupValue);
+        if (newCharacters.length > 0) {
+            const allCharacters = [...existingCharacters, ...newCharacters];
+            await localforage.setItem(`${APP_PREFIX}character_list`, allCharacters);
+            console.log(`[迁移] 成功创建 ${newCharacters.length} 个新角色`);
+
+            // 如果当前角色ID无效，则设置为第一个角色
+            let currentCharId = await localforage.getItem(`${APP_PREFIX}current_character`);
+            if (!currentCharId || !allCharacters.some(c => c.id === currentCharId)) {
+                await localforage.setItem(`${APP_PREFIX}current_character`, allCharacters[0].id);
+            }
+            // 弹出通知提示用户刷新（移动端友好）
+            if (typeof showNotification === 'function') {
+                showNotification(`已自动迁移 ${newCharacters.length} 个旧会话为独立角色，请刷新页面`, 'info', 6000);
+            }
+            // 延迟自动刷新（可选）
+            setTimeout(() => location.reload(), 2000);
+        } else {
+            console.log('[迁移] 没有需要迁移的新角色');
         }
-
-        newCharacters.push(newChar);
+    } catch (err) {
+        console.error('[迁移] 严重错误:', err);
+        if (typeof showNotification === 'function') {
+            showNotification('角色迁移失败，请尝试清除浏览器缓存后重试', 'error', 5000);
+        }
     }
-
-    // 4. 合并角色列表并保存
-    const allCharacters = [...existingCharacters, ...newCharacters];
-    await localforage.setItem(`${APP_PREFIX}character_list`, allCharacters);
-
-    // 5. 设置当前角色（优先使用之前激活的会话，否则使用第一个）
-    let currentCharId = null;
-    const lastSessionId = await localforage.getItem(`${APP_PREFIX}lastSessionId`);
-    if (lastSessionId) {
-        const matchedChar = allCharacters.find(c => c.legacySessionId === lastSessionId);
-        if (matchedChar) currentCharId = matchedChar.id;
-    }
-    if (!currentCharId && allCharacters.length > 0) {
-        currentCharId = allCharacters[0].id;
-    }
-    if (currentCharId) {
-        await localforage.setItem(`${APP_PREFIX}current_character`, currentCharId);
-    }
-
-    console.log(`[迁移] 完成！创建了 ${newCharacters.length} 个新角色`);
-    if (typeof showNotification === 'function') {
-        showNotification(`已自动迁移 ${newCharacters.length} 个旧会话为独立角色`, 'info', 5000);
-    }
-}
-// =========================================================================
+}// =========================================================================

@@ -358,7 +358,11 @@ function updateCharacterTotalBadge() {
 document.addEventListener('DOMContentLoaded', async function () {
     const charBtn = document.getElementById('character-manager-btn');
     if (charBtn) {
+        // 同时支持移动端触摸和鼠标点击
         charBtn.addEventListener('click', openCharacterModal);
+        charBtn.addEventListener('touchstart', openCharacterModal, { passive: false });
+        // 防止移动端长按菜单弹出
+        charBtn.style.touchAction = 'manipulation';
     }
 
     const closeBtn = document.getElementById('close-character-modal');
