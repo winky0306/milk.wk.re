@@ -3,6 +3,9 @@
 // 在 loadData() 函数的最开始添加
 async function migrateOldDataToCurrentRole() {
     if (!CURRENT_CHARACTER_ID) return;
+    // 检查是否已经迁移过，避免重复执行
+    const migratedFlag = await localforage.getItem(`${APP_PREFIX}data_migrated_v2`);
+    if (migratedFlag) return; // 已经迁移过，直接跳过
     const oldKeys = await localforage.keys();
     const oldPrefix = APP_PREFIX; // 如 "CHAT_APP_V3_"
     const newPrefix = `${APP_PREFIX}${CURRENT_CHARACTER_ID}_`;
@@ -2366,16 +2369,16 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// 初始化角色系统（替代原有的会话系统）
+/// 初始化角色系统（替代原有的会话系统）
 async function initCharacterSystem() {
     // 1. 加载角色列表
-    const savedChars = await localforage.getItem(`${APP_PREFIX}character_list`);
+    let savedChars = await localforage.getItem(`${APP_PREFIX}character_list`);
+
     if (savedChars && Array.isArray(savedChars) && savedChars.length > 0) {
         CHARACTER_LIST = savedChars;
     } else {
         // 首次使用：创建默认角色
         const defaultId = 'char_' + Date.now();
-        // 从当前 settings 获取梦角名称（如果已存在）
         let defaultName = '梦角';
         if (typeof settings !== 'undefined' && settings.partnerName) {
             defaultName = settings.partnerName;
@@ -2384,22 +2387,31 @@ async function initCharacterSystem() {
             id: defaultId,
             name: defaultName,
             avatar: null,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            unreadCount: 0,
+            lastMessage: '',
+            lastTimestamp: null,
+            doNotDisturb: false
         }];
         await localforage.setItem(`${APP_PREFIX}character_list`, CHARACTER_LIST);
-        if (savedChars && Array.isArray(savedChars) && savedChars.length > 0) {
-            CHARACTER_LIST = savedChars.map(char => ({
-                ...char,
-                unreadCount: char.unreadCount ?? 0,
-                lastMessage: char.lastMessage ?? '',
-                lastTimestamp: char.lastTimestamp ?? null,
-                doNotDisturb: char.doNotDisturb ?? false
-            }));
-        }
-
+        // 重新获取 savedChars 以便后续补全字段（虽然刚创建，但避免下面 if 进不去）
+        savedChars = CHARACTER_LIST;
     }
 
-    // 2. 确定当前角色ID
+    // 确保角色列表中的每条记录都有必要的字段（兼容旧数据）
+    if (savedChars && Array.isArray(savedChars) && savedChars.length > 0) {
+        CHARACTER_LIST = savedChars.map(char => ({
+            ...char,
+            unreadCount: char.unreadCount ?? 0,
+            lastMessage: char.lastMessage ?? '',
+            lastTimestamp: char.lastTimestamp ?? null,
+            doNotDisturb: char.doNotDisturb ?? false
+        }));
+        // 重新保存以补全字段
+        await localforage.setItem(`${APP_PREFIX}character_list`, CHARACTER_LIST);
+    }
+
+    // 2. 确定当前角色ID ← 这是之前缺失的关键代码！
     let storedCharId = await localforage.getItem(`${APP_PREFIX}current_character`);
     if (!storedCharId || !CHARACTER_LIST.some(c => c.id === storedCharId)) {
         storedCharId = CHARACTER_LIST[0].id;
@@ -2407,13 +2419,22 @@ async function initCharacterSystem() {
     }
     CURRENT_CHARACTER_ID = storedCharId;
 
-    // 3. 同步 SESSION_ID 以兼容老代码（可选）
+    // 3. 同步 SESSION_ID 以兼容老代码
     window.SESSION_ID = CURRENT_CHARACTER_ID;
 
     console.log('[角色系统] 当前角色:', CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID)?.name);
 
-    window.SESSION_ID = CURRENT_CHARACTER_ID;
+    // 4. 初始化群聊设置（依赖 CURRENT_CHARACTER_ID）
+    if (typeof initGroupChatForCurrentCharacter === 'function') {
+        initGroupChatForCurrentCharacter();
+    }
 }
+  
+
+    console.log('[角色系统] 当前角色:', CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID)?.name);
+
+    window.SESSION_ID = CURRENT_CHARACTER_ID;
+
 
 // ==================== 截图多选功能 ====================
 function toggleSnapshotMode() {
@@ -2554,15 +2575,7 @@ async function generateMessagesSnapshot() {
     showNotification('正在生成截图，请稍候...', 'info', 2000);
 
     // 1. 获取最新的群聊设置
-    let groupChatSettings = { enabled: false, showAvatar: true, showName: true, members: [] };
-    try {
-        const saved = localStorage.getItem('groupChatSettings');
-        if (saved) {
-            const parsed = JSON.parse(saved);
-            groupChatSettings = { ...groupChatSettings, ...parsed };
-            if (!groupChatSettings.members) groupChatSettings.members = [];
-        }
-    } catch (e) { console.warn('读取群聊设置失败', e); }
+    const groupChatSettings = window.groupChatSettings || { enabled: false, showAvatar: true, showName: true, members: [] };
 
     const isGroupMode = groupChatSettings.enabled === true;
     const showGroupName = isGroupMode && groupChatSettings.showName === true;
