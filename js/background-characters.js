@@ -22,7 +22,8 @@ async function processAllCharacters() {
 
 async function maybeGenerateReplyForCharacter(char) {
     const charSettings = await localforage.getItem(`${APP_PREFIX}${char.id}_chatSettings`);
-    if (!charSettings || charSettings.autoReplyEnabled === false) return;
+    if (!charSettings) return; // 读取失败直接返回，不回复
+    if (charSettings.autoReplyEnabled === false) return;
 
     let charMessages = await localforage.getItem(`${APP_PREFIX}${char.id}_chatMessages`) || [];
     const lastUserMsg = charMessages.filter(m => m.sender === 'user').slice(-1)[0];
@@ -78,7 +79,8 @@ async function generateReplyForCharacter(char, messages) {
 
 async function maybeSendAutoEnvelopeForCharacter(char) {
     const charSettings = await localforage.getItem(`${APP_PREFIX}${char.id}_chatSettings`);
-    if (!charSettings || !charSettings.autoEnvelopeEnabled) return;
+    if (!charSettings) return;
+    if (!charSettings.autoEnvelopeEnabled) return;
 
     const lastEnvelopeKey = `${APP_PREFIX}${char.id}_lastEnvelopeTime`;
     const lastTime = (await localforage.getItem(lastEnvelopeKey)) || 0;
@@ -107,21 +109,40 @@ window.startBackgroundCharacters = async function () {
 };
 
 async function maybeAutoSendMessageForCharacter(char) {
+    // 1. 读取该角色的聊天设置
     let charSettings = await localforage.getItem(`${APP_PREFIX}${char.id}_chatSettings`);
     if (!charSettings) {
-        charSettings = JSON.parse(JSON.stringify(settings));
-        await localforage.setItem(`${APP_PREFIX}${char.id}_chatSettings`, charSettings);
+        // 读取失败时不发送，直接返回（不要 fallback 到全局 settings）
+        console.warn(`[主动发送] 无法读取 ${char.name} 的设置，跳过`);
+        return;
     }
-    if (!charSettings.autoSendEnabled) return;
+    if (!charSettings.autoSendEnabled) {
+        console.log(`[主动发送] ${char.name} 已关闭主动发送`);
+        return;
+    }
 
     const lastAutoSendKey = `${APP_PREFIX}${char.id}_lastAutoSendTime`;
-    let lastTime = await localforage.getItem(lastAutoSendKey) || 0;
+    let lastTime = await localforage.getItem(lastAutoSendKey);
     const intervalMs = (charSettings.autoSendInterval || 5) * 60 * 1000;
-    if (Date.now() - lastTime < intervalMs) return;
 
+    // 如果没有上次发送时间记录，则初始化为当前时间并返回（避免立即发送）
+    if (lastTime === null || lastTime === undefined) {
+        await localforage.setItem(lastAutoSendKey, Date.now());
+        console.log(`[主动发送] ${char.name} 初始化 lastAutoSendTime 为当前时间，下次周期再检查`);
+        return;
+    }
+
+    const now = Date.now();
+    if (now - lastTime < intervalMs) {
+        console.log(`[主动发送] ${char.name} 距离上次发送不足 ${charSettings.autoSendInterval} 分钟，跳过`);
+        return;
+    }
+
+    // 生成回复内容（复用现有函数）
     const replyText = await generateReplyForCharacter(char, []);
     if (!replyText) return;
 
+    // 发送消息
     let charMessages = await localforage.getItem(`${APP_PREFIX}${char.id}_chatMessages`) || [];
     const newMsg = {
         id: Date.now(),
@@ -134,6 +155,7 @@ async function maybeAutoSendMessageForCharacter(char) {
     charMessages.push(newMsg);
     await localforage.setItem(`${APP_PREFIX}${char.id}_chatMessages`, charMessages);
 
+    // 更新角色列表预览
     char.lastMessage = replyText.slice(0, 50);
     char.lastTimestamp = new Date();
     if (!char.doNotDisturb) {
