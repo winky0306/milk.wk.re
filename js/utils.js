@@ -1032,7 +1032,7 @@ ALTER TABLE public.chat_backups DISABLE ROW LEVEL SECURITY;
 -- =============================================
 -- 4. 【关键】增加数据库语句执行超时时间 → 解决上传大备份超时
 -- =============================================
-ALTER ROLE authenticator SET statement_timeout = '120s';
+ALTER ROLE authenticator SET statement_timeout = '300s';
 
 -- 让超时设置立即生效（无需重启数据库）
 NOTIFY SIGHUP;`;
