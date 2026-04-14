@@ -1078,18 +1078,18 @@ async function uploadLocalSnapshotToCloud(reason, options) {
     // ===== 1. 构建备份时强制压缩/缩减图片尺寸（减少 JSON 体积）=====
     let payloadObject = await buildFullBackupPayloadObject();
 
-    // 如果媒体库（图片）太大，自动压缩到 10KB 以内，且对所有大于 30KB 的图片都压缩
+    // 如果媒体库（图片）太大，自动压缩到 5KB 以内，且对所有大于 8KB 的图片都压缩
     if (payloadObject.mediaStore && Object.keys(payloadObject.mediaStore).length > 0) {
         console.log('[云备份] 检测到图片资源，正在压缩...');
         for (let id in payloadObject.mediaStore) {
             let imgUrl = payloadObject.mediaStore[id];
-            // 判断是否为 base64 图片，且大小超过 30KB（原来 150KB 太宽松）
+            // 判断是否为 base64 图片，且大小超过 8KB
             if (imgUrl && imgUrl.startsWith('data:image/')) {
                 const originalSizeKB = Math.ceil((imgUrl.length * 0.75) / 1024);
-                if (originalSizeKB > 30) {  // 大于 30KB 就压缩
+                if (originalSizeKB > 8) {  // 大于 8KB 就压缩
                     try {
-                        // 目标 10KB，最低质量 0.03，最大宽度 240
-                        const compressed = await compressImageToTarget(imgUrl, 10, 0.03, 240);
+                        // 目标 5KB，最低质量 0.02，最大宽度 160
+                        const compressed = await compressImageToTarget(imgUrl, 5, 0.02, 160);
                         payloadObject.mediaStore[id] = compressed;
                         console.log(`[云备份] 图片压缩: ${originalSizeKB}KB → ${Math.ceil((compressed.length * 0.75) / 1024)}KB`);
                     } catch (e) { console.warn('单张图片压缩失败，保留原图', e); }
