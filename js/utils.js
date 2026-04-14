@@ -1615,4 +1615,32 @@ async function importLegacyMultiSessionBackup(data) {
     }
 }
 
+// 移除不可见控制字符（保留换行符、制表符等常见空白）
+function stripControlChars(str) {
+    if (!str) return '';
+    // 移除 ASCII 控制字符（0x00-0x1F, 0x7F）但保留 \n \r \t
+    return str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
+// 解码常见的 HTML 实体（如 &amp; &lt; &gt; &quot; &#39;）
+function decodeHtmlEntities(str) {
+    if (!str) return '';
+    return str.replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+}
+
+// 最终用于通知的清理函数
+function cleanNotificationText(text) {
+    let cleaned = String(text || '');
+    cleaned = stripControlChars(cleaned);
+    cleaned = decodeHtmlEntities(cleaned);
+    // 可选：移除零宽字符（ZWSP, ZWNJ 等）
+    cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
+    return cleaned.trim();
+}
+
 // =========================================================================

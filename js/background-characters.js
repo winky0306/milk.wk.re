@@ -146,7 +146,10 @@ async function maybeAutoSendMessageForCharacter(char) {
     if (!char.doNotDisturb) {
         char.unreadCount = (char.unreadCount || 0) + 1;
         if (Notification.permission === 'granted') {
-            new Notification(`${char.name} 发来新消息`, { body: replyText });
+            const cleanTitle = cleanNotificationText(`${char.name} 发来新消息`);
+            const cleanBody = cleanNotificationText(replyText);
+            new Notification(cleanTitle, { body: cleanBody });
+        }
         }
     } else {
         char.unreadCount = (char.unreadCount || 0) + 1;

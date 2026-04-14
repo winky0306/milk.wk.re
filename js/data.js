@@ -802,19 +802,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-window._sendPartnerNotification = function(title, body) {
+window._sendPartnerNotification = function (title, body) {
     try {
         if (localStorage.getItem('notifEnabled') !== '1') return;
         if (!('Notification' in window)) return;
         if (Notification.permission !== 'granted') return;
         if (!document.hidden) return;
-        new Notification(title || '传讯', {
-            body: body || '对方发来了消息',
+
+        // ✅ 净化文本
+        const cleanTitle = cleanNotificationText(title || '传讯');
+        const cleanBody = cleanNotificationText(body || '对方发来了消息');
+
+        new Notification(cleanTitle, {
+            body: cleanBody,
             icon: (document.querySelector('#partner-avatar img') || {}).src,
             tag: 'partner-msg',
             renotify: true
         });
-    } catch(e) {}
+    } catch (e) { }
 };
 
 window.handleNotifToggle = function(checkbox) {
