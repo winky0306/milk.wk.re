@@ -933,16 +933,25 @@ document.addEventListener('DOMContentLoaded', function() {
     document.head.appendChild(style);
 })();
 // ======================= 贴图压缩功能 =======================
+// ======================= 贴图压缩功能（增强版，支持压缩到 10KB） =======================
 async function compressImageToTarget(base64, targetKB = 15, minQuality = 0.05, maxWidth = 400) {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
             let width = img.width;
             let height = img.height;
-            if (width > maxWidth) {
-                height = height * (maxWidth / width);
-                width = maxWidth;
+
+            // 1. 根据目标 KB 动态调整最大宽度（使压缩更激进）
+            let dynamicMaxWidth = maxWidth;
+            if (targetKB <= 10) dynamicMaxWidth = 240;
+            else if (targetKB <= 15) dynamicMaxWidth = 280;
+            else dynamicMaxWidth = 320;
+
+            if (width > dynamicMaxWidth) {
+                height = height * (dynamicMaxWidth / width);
+                width = dynamicMaxWidth;
             }
+
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
@@ -953,14 +962,16 @@ async function compressImageToTarget(base64, targetKB = 15, minQuality = 0.05, m
             let result = canvas.toDataURL('image/jpeg', quality);
             let sizeKB = Math.ceil((result.length * 0.75) / 1024);
 
+            // 如果原图已经小于目标，直接返回
             if (sizeKB <= targetKB) {
                 resolve(result);
                 return;
             }
 
-            // 二分查找合适的 quality
-            let low = 0.1, high = 0.9;
-            for (let i = 0; i < 10; i++) {
+            // 2. 二分查找合适的 quality（low 起始值使用 minQuality）
+            let low = Math.max(0.03, minQuality);
+            let high = 0.9;
+            for (let i = 0; i < 12; i++) {  // 增加迭代次数，提高精度
                 quality = (low + high) / 2;
                 result = canvas.toDataURL('image/jpeg', quality);
                 sizeKB = Math.ceil((result.length * 0.75) / 1024);
@@ -971,22 +982,29 @@ async function compressImageToTarget(base64, targetKB = 15, minQuality = 0.05, m
                     if (sizeKB >= targetKB * 0.85) break;
                 }
             }
-            // 如果仍然太大，缩小尺寸
+
+            // 3. 如果仍然太大，缩小尺寸（更激进）
             if (sizeKB > targetKB) {
-                let scale = Math.sqrt(targetKB / sizeKB) * 0.85;
-                if (scale < 0.3) scale = 0.3;
+                let scale = Math.sqrt(targetKB / sizeKB) * 0.8;  // 比原来更小的缩放因子
+                if (scale < 0.2) scale = 0.2;
                 canvas.width = Math.max(32, width * scale);
                 canvas.height = Math.max(32, height * scale);
                 ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                result = canvas.toDataURL('image/jpeg', Math.max(0.08, quality * 0.8));
+                result = canvas.toDataURL('image/jpeg', Math.max(0.02, quality * 0.7));
+                sizeKB = Math.ceil((result.length * 0.75) / 1024);
             }
+
+            // 4. 最终保险：强制降到极低质量
+            if (sizeKB > targetKB) {
+                result = canvas.toDataURL('image/jpeg', 0.02);
+            }
+
             resolve(result);
         };
         img.onerror = reject;
         img.src = base64;
     });
 }
-
 // 保存原始数据管理界面内容的备份（用于返回）
 let _originalDataModalBodyHTML = null;
 let _originalDataModalScrollPos = 0;

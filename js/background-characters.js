@@ -1,4 +1,6 @@
 // background-characters.js
+// 内存中记录每个角色上一次发送尝试的时间（毫秒）
+let lastSendAttemptMap = new Map();
 let bgInterval = null;
 let processing = false;
 
@@ -55,7 +57,7 @@ async function maybeSendAutoEnvelopeForCharacter(char) {
 
 window.startBackgroundCharacters = async function () {
     if (bgInterval) clearInterval(bgInterval);
-    bgInterval = setInterval(processAllCharacters, 30000);
+    bgInterval = setInterval(processAllCharacters, 60000);
 };
 
 async function maybeAutoSendMessageForCharacter(char) {
@@ -66,7 +68,7 @@ async function maybeAutoSendMessageForCharacter(char) {
         await localforage.setItem(`${APP_PREFIX}${char.id}_chatSettings`, charSettings);
     }
 
-    // 2. 修复类型问题（避免存成了字符串）
+    // 2. 确保类型正确（防止存成字符串）
     if (typeof charSettings.autoSendEnabled === 'string') {
         charSettings.autoSendEnabled = charSettings.autoSendEnabled === 'true';
     }
@@ -74,20 +76,47 @@ async function maybeAutoSendMessageForCharacter(char) {
         charSettings.autoSendInterval = Number(charSettings.autoSendInterval);
     }
 
+    // 3. 主动发送未开启 → 直接返回
     if (!charSettings.autoSendEnabled) return;
 
-    const lastAutoSendKey = `${APP_PREFIX}${char.id}_lastAutoSendTime`;
-    let lastTime = await localforage.getItem(lastAutoSendKey) || 0;
-    let intervalVal = charSettings.autoSendInterval;
-    if (typeof intervalVal !== 'number') intervalVal = Number(intervalVal);
-    if (isNaN(intervalVal)) intervalVal = 5;
-    const intervalMs = intervalVal * 60 * 1000;
-    if (Date.now() - lastTime < intervalMs) return;
+    const intervalVal = charSettings.autoSendInterval || 5;
+    const intervalMs = intervalVal * 60 * 1000;   // 分钟转毫秒
+    const now = Date.now();
 
+    // 4. 内存限流：如果距离上一次尝试发送不到间隔的 80%，直接跳过（防止并发）
+    const lastMemTime = lastSendAttemptMap.get(char.id) || 0;
+    if (now - lastMemTime < intervalMs * 0.8) {
+        return;
+    }
+    // 立即记录本次尝试（先占位）
+    lastSendAttemptMap.set(char.id, now);
+
+    // 5. 读取存储的上次发送时间（增加 try-catch 防止读取失败）
+    const lastAutoSendKey = `${APP_PREFIX}${char.id}_lastAutoSendTime`;
+    let lastTime = 0;
+    try {
+        lastTime = (await localforage.getItem(lastAutoSendKey)) || 0;
+    } catch (err) {
+        console.warn(`[主动发送] 读取 ${char.name} 的上次时间失败，本次跳过`, err);
+        return;
+    }
+
+    // 6. 判断是否达到间隔（如果 lastTime 为 0 或 间隔足够）
+    if (now - lastTime < intervalMs) return;
+
+    // 7. 生成回复文本（如果字卡库为空则不发）
     const replyText = await generateReplyForCharacter(char, []);
     if (!replyText) return;
 
-    let charMessages = await localforage.getItem(`${APP_PREFIX}${char.id}_chatMessages`) || [];
+    // 8. 读取该角色的聊天记录并追加新消息
+    let charMessages = [];
+    try {
+        charMessages = (await localforage.getItem(`${APP_PREFIX}${char.id}_chatMessages`)) || [];
+    } catch (err) {
+        console.warn(`[主动发送] 读取 ${char.name} 的聊天记录失败`, err);
+        return;
+    }
+
     const newMsg = {
         id: Date.now(),
         sender: charSettings.partnerName || char.name,
@@ -97,8 +126,21 @@ async function maybeAutoSendMessageForCharacter(char) {
         type: 'normal'
     };
     charMessages.push(newMsg);
-    await localforage.setItem(`${APP_PREFIX}${char.id}_chatMessages`, charMessages);
 
+    // 9. 保存消息和上次发送时间（两个操作，确保都成功）
+    try {
+        await localforage.setItem(`${APP_PREFIX}${char.id}_chatMessages`, charMessages);
+        await localforage.setItem(lastAutoSendKey, now);
+        // 更新内存 Map 中的成功时间（与存储一致）
+        lastSendAttemptMap.set(char.id, now);
+    } catch (err) {
+        console.error(`[主动发送] 保存 ${char.name} 的数据失败，本次发送作废`, err);
+        // 保存失败时从内存 Map 中删除占位，避免永久阻塞
+        lastSendAttemptMap.delete(char.id);
+        return;
+    }
+
+    // 10. 更新角色列表中的最后消息预览（用于角色列表显示）
     char.lastMessage = replyText.slice(0, 50);
     char.lastTimestamp = new Date();
     if (!char.doNotDisturb) {
@@ -110,6 +152,8 @@ async function maybeAutoSendMessageForCharacter(char) {
         char.unreadCount = (char.unreadCount || 0) + 1;
     }
     await saveCharacterList();
-    await localforage.setItem(lastAutoSendKey, Date.now());
     if (typeof updateCharacterListUI === 'function') updateCharacterListUI();
+
+    // 可选：播放一个提示音
+    if (typeof playSound === 'function') playSound('message');
 }

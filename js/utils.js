@@ -1007,21 +1007,35 @@ async function ensureSupabaseTableGuide() {
 
         if (!modal || !sqlDisplay || !closeBtn) return resolve();
 
-        const sqlCode = `-- 1. 如果旧表存在，安全地删除它
+        const sqlCode = `-- =============================================
+-- 1. 清理旧表（如果存在），避免冲突
+-- =============================================
 DROP TABLE IF EXISTS public.chat_backups;
 
--- 2. 创建新的、字段类型完全正确的备份表
+-- =============================================
+-- 2. 创建备份表（字段类型正确，支持大 JSON）
+-- =============================================
 CREATE TABLE public.chat_backups (
   id TEXT PRIMARY KEY,
-  backup_json JSONB, -- 使用 JSONB 类型来保证数据完整性
-  updated_at TIMESTAMPTZ,
-  size_bytes BIGINT,
-  hash TEXT,
-  source TEXT
+  backup_json JSONB,           -- 存储完整备份数据
+  updated_at TIMESTAMPTZ,      -- 最后更新时间
+  size_bytes BIGINT,           -- 备份大小（字节）
+  hash TEXT,                   -- 备份内容的 SHA-256 哈希
+  source TEXT                  -- 来源标记（如 "local-edit" / "cloud-push"）
 );
 
--- 3. 关闭这张表的行级安全策略 (RLS)
-ALTER TABLE public.chat_backups DISABLE ROW LEVEL SECURITY;`;
+-- =============================================
+-- 3. 关闭行级安全策略（允许应用自由读写）
+-- =============================================
+ALTER TABLE public.chat_backups DISABLE ROW LEVEL SECURITY;
+
+-- =============================================
+-- 4. 【关键】增加数据库语句执行超时时间 → 解决上传大备份超时
+-- =============================================
+ALTER ROLE authenticator SET statement_timeout = '120s';
+
+-- 让超时设置立即生效（无需重启数据库）
+NOTIFY SIGHUP;`;
         
         sqlDisplay.value = sqlCode;
 
@@ -1041,11 +1055,10 @@ async function fetchCloudBackupMeta() {
         .from('chat_backups')
         .select('updated_at,size_bytes,hash,source,id')
         .eq('id', CLOUD_SYNC_SINGLE_BACKUP_ID)
-        .single();
-    if (ret.error && ret.error.code !== 'PGRST116') throw ret.error;
+        .maybeSingle();  // 替换 .single() 为 .maybeSingle()
+    if (ret.error) throw ret.error;
     return ret.data || null;
 }
-
 async function fetchCloudBackupRow() {
     const client = getSupabaseClient();
     if (!client) return null;
@@ -1053,25 +1066,53 @@ async function fetchCloudBackupRow() {
         .from('chat_backups')
         .select('id,backup_json,updated_at,size_bytes,hash,source')
         .eq('id', CLOUD_SYNC_SINGLE_BACKUP_ID)
-        .single();
-    if (ret.error && ret.error.code !== 'PGRST116') throw ret.error;
+        .maybeSingle();  // 替换 .single() 为 .maybeSingle()
+    if (ret.error) throw ret.error;
     return ret.data || null;
 }
-
 async function uploadLocalSnapshotToCloud(reason, options) {
     const client = getSupabaseClient();
     if (!client) throw new Error('尚未配置 Supabase');
 
     const opts = options || {};
-    const payloadObject = await buildFullBackupPayloadObject();
-    const jsonForMeta = JSON.stringify(payloadObject);
+    // ===== 1. 构建备份时强制压缩/缩减图片尺寸（减少 JSON 体积）=====
+    let payloadObject = await buildFullBackupPayloadObject();
 
+    // 如果媒体库（图片）太大，自动压缩到 10KB 以内，且对所有大于 30KB 的图片都压缩
+    if (payloadObject.mediaStore && Object.keys(payloadObject.mediaStore).length > 0) {
+        console.log('[云备份] 检测到图片资源，正在压缩...');
+        for (let id in payloadObject.mediaStore) {
+            let imgUrl = payloadObject.mediaStore[id];
+            // 判断是否为 base64 图片，且大小超过 30KB（原来 150KB 太宽松）
+            if (imgUrl && imgUrl.startsWith('data:image/')) {
+                const originalSizeKB = Math.ceil((imgUrl.length * 0.75) / 1024);
+                if (originalSizeKB > 30) {  // 大于 30KB 就压缩
+                    try {
+                        // 目标 10KB，最低质量 0.03，最大宽度 240
+                        const compressed = await compressImageToTarget(imgUrl, 10, 0.03, 240);
+                        payloadObject.mediaStore[id] = compressed;
+                        console.log(`[云备份] 图片压缩: ${originalSizeKB}KB → ${Math.ceil((compressed.length * 0.75) / 1024)}KB`);
+                    } catch (e) { console.warn('单张图片压缩失败，保留原图', e); }
+                }
+            }
+        }
+    }
+
+    const jsonForMeta = JSON.stringify(payloadObject);
     const meta = {
         updated_at: new Date().toISOString(),
         size_bytes: new Blob([jsonForMeta]).size,
         hash: await calcTextSha256(jsonForMeta),
         source: reason || 'cloud-push'
     };
+
+    // 如果备份体积超过 4MB，给出警告并建议手动配置超时
+    if (meta.size_bytes > 4 * 1024 * 1024) {
+        console.warn('[云备份] 备份体积较大(' + (meta.size_bytes / 1024 / 1024).toFixed(1) + 'MB)，可能超时。建议按方案一增加数据库超时。');
+        if (!opts.silent && typeof showNotification === 'function') {
+            showNotification('备份较大（含大量图片），上传可能需要较长时间，请勿关闭页面', 'info', 5000);
+        }
+    }
 
     const dbPayload = {
         id: CLOUD_SYNC_SINGLE_BACKUP_ID,
@@ -1082,25 +1123,46 @@ async function uploadLocalSnapshotToCloud(reason, options) {
         source: meta.source
     };
 
-    const ret = await client
-        .from('chat_backups')
-        .upsert(dbPayload)
-        .select('updated_at,size_bytes,hash,source')
-        .single();
+    // ===== 2. 增加超时重试机制 =====
+    let retryCount = 0;
+    const maxRetries = 2;
+    let lastError = null;
 
-    if (ret.error) throw ret.error;
+    while (retryCount <= maxRetries) {
+        try {
+            const ret = await client
+                .from('chat_backups')
+                .upsert(dbPayload)
+                .select('updated_at,size_bytes,hash,source')
+                .single();
 
-    setCloudSyncMeta(meta);
+            if (ret.error) throw ret.error;
 
-    if (!opts.silent) {
-        updateCloudSyncStatusUI({
-            statusText: '云端已连接，最近一次已上传',
-            localMeta: meta,
-            cloudMeta: ret.data
-        });
+            setCloudSyncMeta(meta);
+            if (!opts.silent) {
+                updateCloudSyncStatusUI({
+                    statusText: '云端已连接，最近一次已上传',
+                    localMeta: meta,
+                    cloudMeta: ret.data
+                });
+            }
+            return ret.data;
+        } catch (err) {
+            lastError = err;
+            retryCount++;
+            if (retryCount <= maxRetries && err.message && err.message.includes('timeout')) {
+                console.log(`[云备份] 上传超时，第 ${retryCount} 次重试...`);
+                if (typeof showNotification === 'function') {
+                    showNotification(`上传超时，正在重试 (${retryCount}/${maxRetries})...`, 'warning', 2000);
+                }
+                await new Promise(r => setTimeout(r, 2000 * retryCount)); // 等待2秒再重试
+            } else {
+                break;
+            }
+        }
     }
 
-    return ret.data;
+    throw lastError || new Error('上传失败，多次重试后依然超时');
 }
 
 async function applyCloudJsonToLocal(jsonData) {
