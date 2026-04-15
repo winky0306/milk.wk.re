@@ -11126,3 +11126,8 @@
 #character-total-badge {
     /* 继承 .env-badge 样式，无需额外修改，但可保证显示 */
 }
+
+/* 强制显示 PWA 安装栏 */
+#pwa-install-row {
+    display: flex !important;
+}

@@ -1,24 +1,24 @@
 {
-    "name": "传讯",
-        "short_name": "传讯",
-            "description": "与梦角的专属聊天空间",
-                "start_url": ".",
-                    "display": "standalone",
-                        "theme_color": "#000000",
-                            "background_color": "#000000",
-                                "orientation": "portrait",
-                                    "icons": [
-                                        {
-                                            "src": "https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg",
-                                            "sizes": "192x192",
-                                            "type": "image/jpeg",
-                                            "purpose": "any maskable"
-                                        },
-                                        {
-                                            "src": "https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg",
-                                            "sizes": "512x512",
-                                            "type": "image/jpeg",
-                                            "purpose": "any maskable"
-                                        }
-                                    ]
-}// JavaScript source code
+  "name": "Milk",
+  "short_name": "Milk",
+  "description": "涓庢ⅵ瑙掔殑涓撳睘鑱婂ぉ绌洪棿",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#000000",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://file.youtochat.com/images/20260216/1771224856844_qdqqd.jpeg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}
