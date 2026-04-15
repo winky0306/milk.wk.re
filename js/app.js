@@ -280,19 +280,61 @@ let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredPrompt = e;
-    // 显示安装按钮（如果之前隐藏了）
-    const installRow = document.getElementById('pwa-install-row');
-    if (installRow) installRow.style.display = '';
-    const installDesc = document.getElementById('pwa-install-desc');
-    if (installDesc) installDesc.textContent = '点击安装，添加到桌面';
+    // 更新安装按钮的样式和文字
+    updatePwaInstallButton();
 });
 
-// 监听安装按钮点击（使用事件委托，因为 data-modal 是动态生成的）
+window.addEventListener('appinstalled', () => {
+    const installRow = document.getElementById('pwa-install-row');
+    if (installRow) installRow.style.display = 'none';
+});
+
+// 更新安装按钮的显示状态和提示文字
+function updatePwaInstallButton() {
+    const installRow = document.getElementById('pwa-install-row');
+    const installDesc = document.getElementById('pwa-install-desc');
+    if (!installRow) return;
+
+    // 确保安装栏始终显示
+    installRow.style.display = '';
+
+    if (deferredPrompt) {
+        // 支持原生安装（Android Chrome等）
+        installDesc.textContent = '点击安装，添加到桌面';
+    } else {
+        // 不支持原生安装（iOS Safari 或部分浏览器）
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (isMobile) {
+            installDesc.textContent = '点击查看如何添加到主屏幕';
+        } else {
+            installDesc.textContent = '浏览器不支持自动安装';
+        }
+    }
+}
+
+// 页面加载完成后显示安装栏
+document.addEventListener('DOMContentLoaded', () => {
+    updatePwaInstallButton();
+});
+
+// 每次打开数据管理弹窗时，重新检查安装按钮状态
+const dataModal = document.getElementById('data-modal');
+if (dataModal) {
+    const observer = new MutationObserver(() => {
+        if (dataModal.style.display === 'flex' || dataModal.style.display === 'block') {
+            updatePwaInstallButton();
+        }
+    });
+    observer.observe(dataModal, { attributes: true, attributeFilter: ['style'] });
+}
+
+// 监听安装按钮点击（事件委托）
 document.body.addEventListener('click', (e) => {
     const btn = e.target.closest('#pwa-install-btn');
     if (!btn) return;
 
     if (deferredPrompt) {
+        // 原生安装
         deferredPrompt.prompt();
         deferredPrompt.userChoice.then(choiceResult => {
             if (choiceResult.outcome === 'accepted') {
@@ -303,13 +345,14 @@ document.body.addEventListener('click', (e) => {
             deferredPrompt = null;
         });
     } else {
-        // 如果没有 beforeinstallprompt 事件，可能是已安装或浏览器不支持
-        alert('您的浏览器不支持自动安装，请手动添加到主屏幕：\n• Chrome: 菜单 → 添加到主屏幕\n• Safari: 分享 → 添加到主屏幕');
+        // 手动安装指引
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        if (isIOS) {
+            alert('请点击底部的“分享”按钮，然后选择“添加到主屏幕”');
+        } else if (/Android/i.test(navigator.userAgent)) {
+            alert('请点击浏览器菜单，选择“添加到主屏幕”或“安装应用”');
+        } else {
+            alert('您的浏览器不支持自动安装，请手动添加到主屏幕');
+        }
     }
-});
-
-// 如果已经安装，隐藏安装按钮（可选）
-window.addEventListener('appinstalled', () => {
-    const installRow = document.getElementById('pwa-install-row');
-    if (installRow) installRow.style.display = 'none';
 });
