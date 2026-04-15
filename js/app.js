@@ -273,3 +273,43 @@ window.addEventListener('load', function() {
         } catch(e) { console.warn('Daily greeting timing error:', e); }
     }, 4500);
 }, { once: true });
+
+// ---------- PWA 安装功能 ----------
+let deferredPrompt = null;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    // 显示安装按钮（如果之前隐藏了）
+    const installRow = document.getElementById('pwa-install-row');
+    if (installRow) installRow.style.display = '';
+    const installDesc = document.getElementById('pwa-install-desc');
+    if (installDesc) installDesc.textContent = '点击安装，添加到桌面';
+});
+
+// 监听安装按钮点击（使用事件委托，因为 data-modal 是动态生成的）
+document.body.addEventListener('click', (e) => {
+    const btn = e.target.closest('#pwa-install-btn');
+    if (!btn) return;
+
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then(choiceResult => {
+            if (choiceResult.outcome === 'accepted') {
+                console.log('用户接受了安装');
+            } else {
+                console.log('用户拒绝了安装');
+            }
+            deferredPrompt = null;
+        });
+    } else {
+        // 如果没有 beforeinstallprompt 事件，可能是已安装或浏览器不支持
+        alert('您的浏览器不支持自动安装，请手动添加到主屏幕：\n• Chrome: 菜单 → 添加到主屏幕\n• Safari: 分享 → 添加到主屏幕');
+    }
+});
+
+// 如果已经安装，隐藏安装按钮（可选）
+window.addEventListener('appinstalled', () => {
+    const installRow = document.getElementById('pwa-install-row');
+    if (installRow) installRow.style.display = 'none';
+});

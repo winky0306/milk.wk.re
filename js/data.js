@@ -106,7 +106,8 @@
         +       '<div class="dm-row-icon amber"><i class="fas fa-bell"></i></div>'
         +       '<div class="dm-row-info"><div class="dm-row-title">后台消息推送</div><div class="dm-row-desc" id="notif-status-text">收到新消息时弹出提醒</div></div>'
         +       '<label class="dm-toggle-pill"><input type="checkbox" id="notif-permission-toggle" onchange="handleNotifToggle(this)"><span class="dm-toggle-slider"></span></label>'
-        +     '</div>'
+        + '</div>'
+
         +     '<div class="dm-row-item" id="replay-tutorial-btn-row" style="cursor:pointer">'
         +       '<div class="dm-row-icon slate"><i class="fas fa-compass"></i></div>'
         +       '<div class="dm-row-info"><div class="dm-row-title">重放新手引导</div><div class="dm-row-desc">重新播放功能介绍教程</div></div>'
@@ -116,7 +117,12 @@
         +       '<div class="dm-row-icon violet"><i class="fas fa-scroll"></i></div>'
         +       '<div class="dm-row-info"><div class="dm-row-title">声明与致谢</div><div class="dm-row-desc">开源声明、致谢名单</div></div>'
         +       '<button class="dm-nav-btn" id="open-credits-btn"><i class="fas fa-chevron-right"></i></button>'
-        +     '</div>'
+        + '</div>'
+        + '<div class="dm-row-item" id="pwa-install-row" style="cursor:pointer;">'
+        + '<div class="dm-row-icon" style="background:rgba(100,200,255,0.14)"><i class="fas fa-download"></i></div>'
+        + '<div class="dm-row-info"><div class="dm-row-title">安装应用</div><div class="dm-row-desc" id="pwa-install-desc">点击安装，像APP一样使用</div></div>'
+        + '<button class="dm-nav-btn" id="pwa-install-btn"><i class="fas fa-chevron-right"></i></button>'
+        + '</div>'
         +   '</div>'
 
         +   '<div class="dm-section-label danger-label"><i class="fas fa-triangle-exclamation"></i> 危险操作</div>'
