@@ -1544,78 +1544,39 @@ if (_cancelEnvEl) _cancelEnvEl.addEventListener('click', () => {
                     }
                 });
             }
-
-        }
-
-
-
-        DOMElements.sessionModal.managerBtn.addEventListener('click', () => {
-            renderSessionList(); showModal(DOMElements.sessionModal.modal);
-        });
-        DOMElements.sessionModal.createBtn.addEventListener('click', async () => {
-            await createNewSession(false);
-            renderSessionList();
-            showNotification('新会话已创建', 'success');
-        });
-
-        DOMElements.sessionModal.list.addEventListener('click', (e) => {
-            const item = e.target.closest('.session-item');
-            if (!item) return;
-            const sessionId = item.dataset.id;
-
-            if (e.target.closest('.rename')) {
-                const session = sessionList.find(s => s.id === sessionId);
-                const newName = prompt('输入新的会话名称:', session.name);
-                if (newName && newName.trim()) {
-                    session.name = newName.trim();
-                    localforage.setItem(`${APP_PREFIX}sessionList`, sessionList); 
-                    renderSessionList();
-                    showNotification('会话已重命名', 'success');
-                }
-            } else if (e.target.closest('.delete')) {
-                if (sessionList.length <= 1) {
-                    showNotification('无法删除最后一个会话', 'warning');
-                    return;
-                }
-                if (confirm('确定要删除此会话及其所有聊天记录吗？此操作不可恢复')) {
-
-                    const currentSessionId = SESSION_ID;
-
-                    sessionList = sessionList.filter(s => s.id !== sessionId);
-localforage.setItem(`${APP_PREFIX}sessionList`, sessionList);
-
-// 同时清除 localStorage 和 localforage 中该会话的所有键
-Object.keys(localStorage).forEach(key => {
-    if (key.startsWith(`${APP_PREFIX}${sessionId}_`)) safeRemoveItem(key);
-});
-localforage.keys().then(keys => {
-    keys.forEach(key => {
-        if (key.startsWith(`${APP_PREFIX}${sessionId}_`)) {
-            localforage.removeItem(key).catch(() => {});
-        }
-    });
-}).catch(() => {});
-
-if (sessionId === currentSessionId) {
-    const newCurrentId = sessionList[0].id;
-    localforage.setItem(`${APP_PREFIX}customThemes`, customThemes);
-    window.location.hash = newCurrentId;
-    window.location.reload();
-} else {
-    renderSessionList();
-    showNotification('会话已删除', 'success');
-}
-                }
-            } else {
-
-                if (sessionId !== SESSION_ID) {
-                    if (confirm('切换会话将刷新页面，确定要继续吗？')) {
-                        window.location.hash = sessionId;
-                        window.location.reload();
+            // 在 initDataManagementListeners 函数内部添加
+            const archiveOnlyBtn = document.getElementById('archive-only-btn');
+            if (archiveOnlyBtn) {
+                archiveOnlyBtn.addEventListener('click', async () => {
+                    if (messages.length === 0) {
+                        showNotification('当前没有聊天记录可存档', 'warning');
+                        return;
                     }
-                }
+                    const name = prompt('为这个存档起个名字', `存档 ${new Date().toLocaleString()}`);
+                    if (name) {
+                        await saveCurrentChatAsArchive(name);
+                        // 如果存档模态框已打开，刷新列表
+                        if (document.getElementById('session-modal')?.style.display !== 'none') {
+                            renderArchiveList();
+                        }
+                        showNotification(`✅ 聊天已备份为「${name}」，当前记录保持不变`, 'success');
+                    }
+                });
             }
-        });
+}
+
+
+
+DOMElements.sessionModal.managerBtn.addEventListener('click', async () => {
+    await renderArchiveList();   // 显示存档列表
+    showModal(DOMElements.sessionModal.modal);
+});
+DOMElements.sessionModal.createBtn.addEventListener('click', async () => {
+    await createNewSession(false);
+    await renderArchiveList();   // 刷新存档列表
+    showNotification('已清空聊天记录，开始新对话', 'success');
+});
+
 
         const initMusicPlayer = async () => {
     const latestSystemSongs = [{

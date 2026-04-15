@@ -2968,4 +2968,134 @@ async function migrateLegacyDataToCharacters() {
             showNotification('角色迁移失败，请尝试清除浏览器缓存后重试', 'error', 5000);
         }
     }
-}// =========================================================================
+}
+
+// ==================== 聊天记录存档/读档功能 ====================
+// 获取当前角色的存档列表存储键
+function getArchivesStorageKey() {
+    return `${APP_PREFIX}${CURRENT_CHARACTER_ID}_chat_archives`;
+}
+
+// 保存当前聊天记录为一个新存档
+async function saveCurrentChatAsArchive(archiveName) {
+    if (!CURRENT_CHARACTER_ID) {
+        showNotification('角色未初始化', 'error');
+        return null;
+    }
+    const archives = await localforage.getItem(getArchivesStorageKey()) || [];
+    const newArchive = {
+        id: Date.now(),
+        name: archiveName || `存档 ${archives.length + 1}`,
+        createdAt: new Date().toISOString(),
+        messages: JSON.parse(JSON.stringify(messages))
+    };
+    archives.push(newArchive);
+    await localforage.setItem(getArchivesStorageKey(), archives);
+
+    // 👇 新增：刷新存档列表（如果模态框是打开的）
+    if (typeof renderArchiveList === 'function') {
+        renderArchiveList();
+    }
+    showNotification(`✅ 聊天已存档为「${newArchive.name}」`, 'success');
+    return newArchive;
+}
+
+
+// 加载指定存档的聊天记录
+async function loadArchive(archiveId) {
+    const archives = await localforage.getItem(getArchivesStorageKey()) || [];
+    const archive = archives.find(a => a.id == archiveId);
+    if (!archive) {
+        showNotification('存档不存在', 'error');
+        return false;
+    }
+    // 恢复消息（时间戳转回 Date 对象）
+    messages = archive.messages.map(m => ({
+        ...m,
+        timestamp: new Date(m.timestamp)
+    }));
+    displayedMessageCount = HISTORY_BATCH_SIZE;
+    renderMessages();
+    throttledSaveData();
+    showNotification(`已加载存档「${archive.name}」`, 'success');
+    return true;
+}
+
+// 删除存档
+async function deleteArchive(archiveId) {
+    const archives = await localforage.getItem(getArchivesStorageKey()) || [];
+    const newArchives = archives.filter(a => a.id != archiveId);
+    await localforage.setItem(getArchivesStorageKey(), newArchives);
+    showNotification('存档已删除', 'success');
+    renderArchiveList(); // 刷新列表
+}
+
+// 重命名存档
+async function renameArchive(archiveId, newName) {
+    if (!newName.trim()) return;
+    const archives = await localforage.getItem(getArchivesStorageKey()) || [];
+    const archive = archives.find(a => a.id == archiveId);
+    if (archive) {
+        archive.name = newName.trim();
+        await localforage.setItem(getArchivesStorageKey(), archives);
+        renderArchiveList();
+        showNotification('重命名成功', 'success');
+    }
+}
+
+// 渲染存档列表（替换原来的会话列表 UI）
+async function renderArchiveList() {
+    const listContainer = document.getElementById('session-list');
+    if (!listContainer) return;
+    const archives = await localforage.getItem(getArchivesStorageKey()) || [];
+    if (archives.length === 0) {
+        listContainer.innerHTML = '<div class="stats-empty" style="padding:20px 0;"><p>还没有存档，点击下方按钮新建</p></div>';
+        return;
+    }
+    listContainer.innerHTML = archives.map(archive => `
+        <div class="session-item" data-id="${archive.id}">
+            <div class="session-info">
+                <div class="session-name">${escapeHtml(archive.name)}</div>
+                <div class="session-meta">创建于 ${new Date(archive.createdAt).toLocaleString()}</div>
+            </div>
+            <div class="session-actions">
+                <button class="session-action-btn rename" title="重命名"><i class="fas fa-pen"></i></button>
+                <button class="session-action-btn delete" title="删除"><i class="fas fa-trash"></i></button>
+            </div>
+        </div>
+    `).join('');
+
+    // 绑定重命名和删除按钮事件
+    listContainer.querySelectorAll('.rename').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const item = btn.closest('.session-item');
+            const id = item.dataset.id;
+            const newName = prompt('请输入新名称');
+            if (newName) await renameArchive(id, newName);
+        });
+    });
+    listContainer.querySelectorAll('.delete').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (confirm('确定删除此存档吗？')) {
+                const id = btn.closest('.session-item').dataset.id;
+                await deleteArchive(id);
+            }
+        });
+    });
+    // 点击整行加载存档
+    listContainer.querySelectorAll('.session-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            if (e.target.closest('.session-actions')) return;
+            const id = item.dataset.id;
+            if (confirm('加载存档会替换当前聊天记录，确定吗？')) {
+                await loadArchive(id);
+                // 关闭模态框
+                const modal = document.getElementById('session-modal');
+                if (modal && typeof hideModal === 'function') hideModal(modal);
+            }
+        });
+    });
+}
+// =========================================================================

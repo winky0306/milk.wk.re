@@ -562,26 +562,64 @@ function nextTourStep() {
     showTourStep(currentTourStep);
 }
 
+// 新建会话（在当前角色下创建聊天记录存档）
+// 新建会话（备份当前聊天并清空记录，开启全新会话）
 async function createNewSession(switchToIt = true) {
-    const newId = Date.now().toString(36) + Math.random().toString(36).substr(2);
-    const newSession = {
-        id: newId,
-        name: `会话 ${new Date().toLocaleDateString()}`,
-        createdAt: Date.now()
-    };
-
-    sessionList.push(newSession);
-    await localforage.setItem(`${APP_PREFIX}sessionList`, sessionList);
-
-    if (switchToIt) {
-        window.location.hash = newId;
-        window.location.reload();
+    if (messages.length > 0) {
+        const archiveName = prompt('📦 为当前聊天创建一个存档名称（将备份当前记录并开启新会话）：', `存档 ${new Date().toLocaleString()}`);
+        if (archiveName) {
+            await saveCurrentChatAsArchive(archiveName);
+            showNotification('当前聊天已存档，正在清空聊天记录开始新会话...', 'success');
+            clearCurrentChat();  // 执行清空操作
+        } else {
+            showNotification('已取消新建会话', 'info');
+            // 如果会话管理模态框打开，则关闭它
+            const modal = document.getElementById('session-modal');
+            if (modal && typeof hideModal === 'function') hideModal(modal);
+            return;
+        }
+    } else {
+        // 没有消息时，直接清空（确保界面干净）
+        clearCurrentChat();
     }
-    
-    return newId;
+
+    // 关闭会话管理模态框
+    const modal = document.getElementById('session-modal');
+    if (modal && typeof hideModal === 'function') hideModal(modal);
+    return Date.now().toString();
 }
 
-window.selectAnnType = function(type) {
+// 清空当前会话的所有聊天记录，并同步存储
+function clearCurrentChat() {
+    // 清空内存中的消息数组
+    messages = [];
+    window.messages = messages;          // 同步全局引用（保险）
+    displayedMessageCount = HISTORY_BATCH_SIZE;
+
+    // 删除 localStorage 中的紧急备份，防止恢复
+    try { localStorage.removeItem('BACKUP_V1_critical'); } catch (e) { }
+    try { localStorage.removeItem('BACKUP_V1_timestamp'); } catch (e) { }
+
+    // 将空消息数组写入 IndexedDB（使用当前角色的存储键）
+    localforage.setItem(getStorageKey('chatMessages'), []).catch(() => { });
+
+    // 重新渲染聊天界面
+    renderMessages();
+
+    // 可选：更新当前角色的最后消息预览（清空）
+    if (typeof CURRENT_CHARACTER_ID !== 'undefined' && CHARACTER_LIST) {
+        const currentChar = CHARACTER_LIST.find(c => c.id === CURRENT_CHARACTER_ID);
+        if (currentChar) {
+            currentChar.lastMessage = '';
+            currentChar.lastTimestamp = null;
+            if (typeof saveCharacterList === 'function') saveCharacterList();
+        }
+    }
+
+    showNotification('已开启新会话，聊天记录已清空', 'success');
+}
+
+window.selectAnnType = function (type) {
     currentAnniversaryType = type;
     currentAnnType = type; 
     document.querySelectorAll('.anniversary-type-btn').forEach(btn => {
