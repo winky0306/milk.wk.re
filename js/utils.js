@@ -1642,5 +1642,50 @@ function cleanNotificationText(text) {
     cleaned = cleaned.replace(/[\u200B-\u200D\uFEFF]/g, '');
     return cleaned.trim();
 }
+// ==================== 屏蔽词管理 ====================
+window.loadBlocklist = function () {
+    try {
+        const raw = localStorage.getItem('chat_blocklist_words');
+        if (raw) {
+            const arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr : [];
+        }
+    } catch (e) { }
+    return [];
+};
 
+window.saveBlocklist = function (words) {
+    try {
+        localStorage.setItem('chat_blocklist_words', JSON.stringify(words));
+    } catch (e) { }
+};
+
+window.addBlockWord = function (word) {
+    if (!word || word.trim() === '') return false;
+    const wordTrim = word.trim();
+    const list = loadBlocklist();
+    if (!list.includes(wordTrim)) {
+        list.push(wordTrim);
+        saveBlocklist(list);
+        return true;
+    }
+    return false;
+};
+
+window.removeBlockWord = function (word) {
+    let list = loadBlocklist();
+    const newList = list.filter(w => w !== word);
+    if (newList.length !== list.length) {
+        saveBlocklist(newList);
+        return true;
+    }
+    return false;
+};
+
+// 过滤文本中的屏蔽词（用于分词后移除）
+window.filterBlockedWords = function (wordsArray) {
+    const blocklist = loadBlocklist();
+    if (blocklist.length === 0) return wordsArray;
+    return wordsArray.filter(w => !blocklist.includes(w));
+};
 // =========================================================================

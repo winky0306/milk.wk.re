@@ -1,130 +1,147 @@
 function renderStatsContent() {
-            const statsContent = DOMElements.statsModal.content;
+    const statsContent = DOMElements.statsModal.content;
 
-            const partnerMessages = messages.filter(msg =>
-                msg.sender !== 'user' && msg.sender !== null &&
-                msg.text &&
-                msg.type !== 'system'
-            );
-            
-            const myMessages = messages.filter(msg =>
-                msg.sender === 'user' &&
-                msg.text &&
-                msg.type !== 'system'
-            );
+    const partnerMessages = messages.filter(msg =>
+        msg.sender !== 'user' && msg.sender !== null &&
+        msg.text &&
+        msg.type !== 'system'
+    );
 
-            if (partnerMessages.length === 0 && myMessages.length === 0) {
-                statsContent.innerHTML = `
-                    <div class="stats-empty-state">
-                        <div class="stats-empty-icon"><i class="fas fa-chart-pie"></i></div>
-                        <h3>暂无数据</h3>
-                        <p>多聊几句再来看看吧...</p>
-                    </div>`;
-                return;
+    const myMessages = messages.filter(msg =>
+        msg.sender === 'user' &&
+        msg.text &&
+        msg.type !== 'system'
+    );
+
+    if (partnerMessages.length === 0 && myMessages.length === 0) {
+        statsContent.innerHTML = `
+            <div class="stats-empty-state">
+                <div class="stats-empty-icon"><i class="fas fa-chart-pie"></i></div>
+                <h3>暂无数据</h3>
+                <p>多聊几句再来看看吧...</p>
+            </div>`;
+        return;
+    }
+
+    // 辅助函数：从消息数组中提取词频（基于分词），并过滤屏蔽词
+    function getTopWordsFromMessages(msgs, topN = 5) {
+        const freqMap = new Map();
+        const blocklist = window.loadBlocklist ? window.loadBlocklist() : [];
+        msgs.forEach(msg => {
+            if (!msg.text) return;
+            // 复用 tokenize 函数（已在 features.js 定义）
+            if (typeof tokenize !== 'undefined') {
+                const wordsObj = tokenize(msg.text);
+                for (const [word, count] of Object.entries(wordsObj)) {
+                    if (blocklist.includes(word)) continue;
+                    const current = freqMap.get(word) || 0;
+                    freqMap.set(word, current + count);
+                }
+            } else {
+                // 降级：简单按空格分词
+                const words = msg.text.split(/\s+/);
+                words.forEach(w => {
+                    if (w.length < 2) return;
+                    if (blocklist.includes(w)) return;
+                    const current = freqMap.get(w) || 0;
+                    freqMap.set(w, current + 1);
+                });
             }
+        });
+        const sorted = Array.from(freqMap.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, topN)
+            .map(([word, count]) => ({ text: word, count }));
+        return sorted;
+    }
 
-            const getTopReplies = (msgs) => {
-                const countMap = {};
-                msgs.forEach(msg => {
-                    const text = msg.text.trim();
-                    if (text) {
-                        countMap[text] = (countMap[text] || 0) + 1;
-                    }
-                });
-                return Object.entries(countMap)
-                    .map(([text, count]) => ({ text, count }))
-                    .sort((a, b) => b.count - a.count)
-                    .slice(0, 5); 
-            };
+    const partnerTop = getTopWordsFromMessages(partnerMessages, 5);
+    const myTop = getTopWordsFromMessages(myMessages, 5);
 
-            const partnerTop = getTopReplies(partnerMessages);
-            const myTop = getTopReplies(myMessages);
+    const generateRankHTML = (list) => {
+        if (list.length === 0) return '<div style="text-align:center;color:var(--text-secondary);font-size:12px;padding:10px;">暂无数据</div>';
+        const maxVal = list[0].count;
+        return list.map((item, index) => {
+            const percent = (item.count / maxVal) * 100;
+            return `
+            <div class="rank-item">
+                <div class="rank-progress-bg" style="width: ${percent}%; opacity: 0.1; background-color: var(--text-primary);"></div>
+                <div class="rank-info">
+                    <div class="rank-number">#${index + 1}</div>
+                    <div class="rank-text" title="${item.text}">${item.text}</div>
+                    <div class="rank-count">${item.count}次</div>
+                </div>
+            </div>`;
+        }).join('');
+    };
 
-            const generateRankHTML = (list) => {
-                if (list.length === 0) return '<div style="text-align:center;color:var(--text-secondary);font-size:12px;padding:10px;">暂无数据</div>';
-                const maxVal = list[0].count;
-                return list.map((item, index) => {
-                    const percent = (item.count / maxVal) * 100;
-                    return `
-                    <div class="rank-item">
-                        <div class="rank-progress-bg" style="width: ${percent}%; opacity: 0.1; background-color: var(--text-primary);"></div>
-                        <div class="rank-info">
-                            <div class="rank-number">#${index + 1}</div>
-                            <div class="rank-text" title="${item.text}">${item.text}</div>
-                            <div class="rank-count">${item.count}次</div>
-                        </div>
-                    </div>`;
-                }).join('');
-            };
+    const allMsgs = messages.filter(m => m.timestamp);
+    const firstMsg = allMsgs.length > 0 ? allMsgs[0] : { timestamp: new Date() };
+    const lastMsg = allMsgs.length > 0 ? allMsgs[allMsgs.length - 1] : { timestamp: new Date() };
 
-            const allMsgs = messages.filter(m => m.timestamp);
-            const firstMsg = allMsgs.length > 0 ? allMsgs[0] : { timestamp: new Date() };
-            const lastMsg = allMsgs.length > 0 ? allMsgs[allMsgs.length - 1] : { timestamp: new Date() };
+    const formatDate = (dateObj) => {
+        return new Date(dateObj).toLocaleDateString('zh-CN', {
+            month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+        });
+    };
 
-            const formatDate = (dateObj) => {
-                return new Date(dateObj).toLocaleDateString('zh-CN', {
-                    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
-                });
-            };
-
-            statsContent.innerHTML = `
-                <div class="stats-dashboard">
-                    <div class="stats-overview-grid">
-                        <div class="overview-item overview-large">
-                            <div class="overview-value">${messages.length}</div>
-                            <div class="overview-label">总消息数</div>
-                        </div>
-                        <div class="overview-row-two">
-                            <div class="overview-item">
-                                <div class="overview-value">${myMessages.length}</div>
-                                <div class="overview-label">我发送的</div>
-                            </div>
-                            <div class="overview-item">
-                                <div class="overview-value">${partnerMessages.length}</div>
-                                <div class="overview-label">对方发送的</div>
-                            </div>
-                        </div>
-                        <div class="overview-row-dates">
-                            <div class="overview-item overview-date">
-                                <div class="overview-date-icon"><i class="fas fa-seedling"></i></div>
-                                <div>
-                                    <div class="overview-date-label">初次相遇</div>
-                                    <div class="overview-date-value">${formatDate(firstMsg.timestamp)}</div>
-                                </div>
-                            </div>
-                            <div class="overview-item overview-date">
-                                <div class="overview-date-icon"><i class="fas fa-heart"></i></div>
-                                <div>
-                                    <div class="overview-date-label">最近联络</div>
-                                    <div class="overview-date-value">${formatDate(lastMsg.timestamp)}</div>
-                                </div>
-                            </div>
+    statsContent.innerHTML = `
+        <div class="stats-dashboard">
+            <div class="stats-overview-grid">
+                <div class="overview-item overview-large">
+                    <div class="overview-value">${messages.length}</div>
+                    <div class="overview-label">总消息数</div>
+                </div>
+                <div class="overview-row-two">
+                    <div class="overview-item">
+                        <div class="overview-value">${myMessages.length}</div>
+                        <div class="overview-label">我发送的</div>
+                    </div>
+                    <div class="overview-item">
+                        <div class="overview-value">${partnerMessages.length}</div>
+                        <div class="overview-label">对方发送的</div>
+                    </div>
+                </div>
+                <div class="overview-row-dates">
+                    <div class="overview-item overview-date">
+                        <div class="overview-date-icon"><i class="fas fa-seedling"></i></div>
+                        <div>
+                            <div class="overview-date-label">初次相遇</div>
+                            <div class="overview-date-value">${formatDate(firstMsg.timestamp)}</div>
                         </div>
                     </div>
-
-                    <div class="stats-card">
-                        <div style="display:flex; gap:8px; margin-bottom:12px;">
-                            <button id="stats-toggle-partner" class="stats-toggle-btn active" onclick="switchStatsView('partner')">
-                                <i class="fas fa-user-circle"></i> 对方
-                            </button>
-                            <button id="stats-toggle-me" class="stats-toggle-btn" onclick="switchStatsView('me')">
-                                <i class="fas fa-user"></i> 我方
-                            </button>
-                        </div>
-                        <div class="stats-card-title" id="stats-rank-title">
-                            <i class="fas fa-user-circle"></i> 对方高频词 TOP 5
-                        </div>
-                        <div class="stats-rank-list" id="stats-rank-list">
-                            ${generateRankHTML(partnerTop)}
+                    <div class="overview-item overview-date">
+                        <div class="overview-date-icon"><i class="fas fa-heart"></i></div>
+                        <div>
+                            <div class="overview-date-label">最近联络</div>
+                            <div class="overview-date-value">${formatDate(lastMsg.timestamp)}</div>
                         </div>
                     </div>
                 </div>
-            `;
+            </div>
 
-            statsContent._partnerHTML = generateRankHTML(partnerTop);
-            statsContent._myHTML = generateRankHTML(myTop);
-        }
+            <div class="stats-card">
+                <div style="display:flex; gap:8px; margin-bottom:12px;">
+                    <button id="stats-toggle-partner" class="stats-toggle-btn active" onclick="switchStatsView('partner')">
+                        <i class="fas fa-user-circle"></i> 对方
+                    </button>
+                    <button id="stats-toggle-me" class="stats-toggle-btn" onclick="switchStatsView('me')">
+                        <i class="fas fa-user"></i> 我方
+                    </button>
+                </div>
+                <div class="stats-card-title" id="stats-rank-title">
+                    <i class="fas fa-user-circle"></i> 对方高频词 TOP 5
+                </div>
+                <div class="stats-rank-list" id="stats-rank-list">
+                    ${generateRankHTML(partnerTop)}
+                </div>
+            </div>
+        </div>
+    `;
 
+    statsContent._partnerHTML = generateRankHTML(partnerTop);
+    statsContent._myHTML = generateRankHTML(myTop);
+}
         window.switchStatsView = function(who) {
             const statsContent = DOMElements.statsModal.content;
             const partnerBtn = document.getElementById('stats-toggle-partner');
@@ -1796,6 +1813,16 @@ function initComboMenu() {
             var canvas = container.querySelector('#wc-canvas');
             if (!canvas) return;
             var d = data(v);
+            // ========== 新增：过滤屏蔽词 ==========
+            if (window.loadBlocklist) {
+                var blocklist = window.loadBlocklist();
+                if (blocklist.length) {
+                    d.words = d.words.filter(function (item) {
+                        return !blocklist.includes(item.word);
+                    });
+                }
+            }
+            // ==========
             drawWordCloud(canvas, d.words);
             renderRank(d.words);
             renderSummary(d);

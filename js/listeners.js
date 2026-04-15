@@ -8,17 +8,120 @@ function setupEventListeners() {
         initNewFeatureListeners();
         setupTutorialListeners();
         initMoodListeners();
-        initDecisionModule(); 
-        initAnniversaryModule(); 
-        initThemeEditor(); 
+        initDecisionModule();
+        initAnniversaryModule();
+        initThemeEditor();
         initThemeSchemes();
-        
-        initComboMenu(); 
-        
+
+        initComboMenu();
+
     } catch (e) {
         console.error("事件绑定过程中发生错误:", e);
+        window.setupEventListeners = setupEventListeners;
     }
 }
+    // 默认让统计面板可见（打开统计弹窗时）
+    setTimeout(() => {
+        if (document.getElementById('stats-modal') && typeof window.switchStatsTab === 'function') {
+            window.switchStatsTab('stats');
+        }
+    }, 500);
+    // 屏蔽词管理按钮
+    const openBlocklistBtn = document.getElementById('open-blocklist-btn');
+    if (openBlocklistBtn) {
+        openBlocklistBtn.addEventListener('click', () => {
+            const modal = document.getElementById('blocklist-modal');
+            if (modal) {
+                refreshBlocklistUI();
+                showModal(modal);
+            }
+        });
+    }
+
+    // 关闭屏蔽词弹窗
+    const closeBlocklistBtn = document.getElementById('close-blocklist-modal');
+    if (closeBlocklistBtn) {
+        closeBlocklistBtn.addEventListener('click', () => {
+            const modal = document.getElementById('blocklist-modal');
+            if (modal) hideModal(modal);
+        });
+    }
+
+    // 添加屏蔽词
+    const addBlockBtn = document.getElementById('add-blockword-btn');
+    if (addBlockBtn) {
+        addBlockBtn.addEventListener('click', () => {
+            const input = document.getElementById('new-blockword');
+            const word = input.value.trim();
+            if (word === '') {
+                showNotification('请输入要屏蔽的词', 'warning');
+                return;
+            }
+            if (window.addBlockWord(word)) {
+                showNotification(`已屏蔽 “${word}”`, 'success');
+                input.value = '';
+                refreshBlocklistUI();
+                // 如果词云或统计面板开着，刷新数据
+                if (document.getElementById('wordcloud-panel') && document.getElementById('wordcloud-panel').style.display !== 'none') {
+                    if (typeof renderWordCloud === 'function') renderWordCloud();
+                }
+                if (document.getElementById('stats-panel') && document.getElementById('stats-panel').style.display !== 'none') {
+                    if (typeof renderStatsContent === 'function') renderStatsContent();
+                }
+            } else {
+                showNotification('这个词已经在屏蔽列表里了', 'info');
+            }
+        });
+    }
+
+// 从字卡库添加屏蔽词
+const addFromRepliesBtn = document.getElementById('add-from-replies-btn');
+if (addFromRepliesBtn) {
+    addFromRepliesBtn.addEventListener('click', () => {
+        if (!customReplies || customReplies.length === 0) {
+            showNotification('字卡库为空，请先去「自定义回复」中添加字卡', 'warning');
+            return;
+        }
+        // ✅ 调用回复库选择模式（图形化界面）
+        if (typeof window._openBlockwordPickFromReplies === 'function') {
+            window._openBlockwordPickFromReplies();
+        } else {
+            console.warn('_openBlockwordPickFromReplies 未定义，请检查 reply-library.js');
+            showNotification('功能未加载，请刷新页面重试', 'error');
+        }
+    });
+}
+    // 刷新屏蔽词列表UI
+    function refreshBlocklistUI() {
+        const container = document.getElementById('blocklist-container');
+        if (!container) return;
+        const words = window.loadBlocklist();
+        if (words.length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding: 20px; color: var(--text-secondary);">暂无屏蔽词</div>';
+            return;
+        }
+        container.innerHTML = words.map(w => `
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border-color);">
+            <span>${escapeHtml(w)}</span>
+            <button class="remove-blockword-btn" data-word="${escapeHtml(w)}" style="background: none; border: none; color: #ff4757; cursor: pointer; font-size: 14px;">
+                <i class="fas fa-trash"></i>
+            </button>
+        </div>
+    `).join('');
+        // 绑定删除按钮事件
+        container.querySelectorAll('.remove-blockword-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const word = btn.getAttribute('data-word');
+                if (word && window.removeBlockWord(word)) {
+                    showNotification(`已取消屏蔽 “${word}”`, 'success');
+                    refreshBlocklistUI();
+                    if (typeof renderWordCloud === 'function') renderWordCloud();
+                    if (typeof renderStatsContent === 'function') renderStatsContent();
+                }
+            });
+        });
+    }
+
 
 function initChatActionListeners() {
             DOMElements.chatContainer.addEventListener('click', (e) => {
@@ -2746,3 +2849,49 @@ async function syncCurrentCharacterToCharacterList() {
         renderCharacterList(); // 如果角色列表打开则刷新
     }
 }
+
+    // ==================== 修复统计面板标签切换 ====================
+    window.switchStatsTab = function (tab) {
+        // 获取四个面板元素
+        const statsPanel = document.getElementById('stats-panel');
+        const searchPanel = document.getElementById('search-panel');
+        const favoritesPanel = document.getElementById('favorites-panel');
+        const wordcloudPanel = document.getElementById('wordcloud-panel');
+
+        // 获取四个按钮
+        const statsBtn = document.getElementById('stats-tab-btn');
+        const searchBtn = document.getElementById('search-tab-btn');
+        const favBtn = document.getElementById('favorites-tab-btn');
+        const wcBtn = document.getElementById('wordcloud-tab-btn');
+
+        // 全部隐藏
+        if (statsPanel) statsPanel.style.display = 'none';
+        if (searchPanel) searchPanel.style.display = 'none';
+        if (favoritesPanel) favoritesPanel.style.display = 'none';
+        if (wordcloudPanel) wordcloudPanel.style.display = 'none';
+
+        // 去掉所有按钮的 active 样式
+        if (statsBtn) statsBtn.classList.remove('active');
+        if (searchBtn) searchBtn.classList.remove('active');
+        if (favBtn) favBtn.classList.remove('active');
+        if (wcBtn) wcBtn.classList.remove('active');
+
+        // 根据 tab 显示对应面板并高亮按钮
+        if (tab === 'stats') {
+            if (statsPanel) statsPanel.style.display = 'block';
+            if (statsBtn) statsBtn.classList.add('active');
+            if (typeof renderStatsContent === 'function') renderStatsContent();
+        } else if (tab === 'search') {
+            if (searchPanel) searchPanel.style.display = 'block';
+            if (searchBtn) searchBtn.classList.add('active');
+            if (typeof window._runMsgSearch === 'function') window._runMsgSearch();
+        } else if (tab === 'favorites') {
+            if (favoritesPanel) favoritesPanel.style.display = 'block';
+            if (favBtn) favBtn.classList.add('active');
+            if (typeof renderFavorites === 'function') renderFavorites();
+        } else if (tab === 'wordcloud') {
+            if (wordcloudPanel) wordcloudPanel.style.display = 'block';
+            if (wcBtn) wcBtn.classList.add('active');
+            if (typeof renderWordCloud === 'function') renderWordCloud();
+        }
+    };

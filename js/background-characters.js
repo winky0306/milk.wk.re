@@ -150,7 +150,7 @@ async function maybeAutoSendMessageForCharacter(char) {
             const cleanBody = cleanNotificationText(replyText);
             new Notification(cleanTitle, { body: cleanBody });
         }
-        }
+        
     } else {
         char.unreadCount = (char.unreadCount || 0) + 1;
     }

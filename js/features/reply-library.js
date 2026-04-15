@@ -2909,6 +2909,13 @@ function initReplyLibraryListeners() {
             renderReplyLibrary();
             showModal(DOMElements.customRepliesModal.modal);
         });
+        // 在 initReplyLibraryListeners 函数内，找到关闭按钮的代码附近添加
+        const closeModalBtn = document.getElementById('close-custom-replies');
+        if (closeModalBtn) {
+            closeModalBtn.addEventListener('click', () => {
+                if (_blockwordPickMode) _exitBlockwordPickMode();
+            });
+        }
     }
 
     document.querySelectorAll('.sidebar-btn').forEach(btn => {
@@ -3202,3 +3209,343 @@ function applyAllAvatarFrames() {
         document.documentElement.style.setProperty('--avatar-corner-radius', settings.avatarCornerRadius + 'px');
     }
 }
+// ==================== 屏蔽词独立选择模式（从字卡库添加） ====================
+let _blockwordPickMode = false;           // 是否处于屏蔽词选择模式
+let _blockwordSelectedIndices = new Set(); // 选中的字卡索引
+
+// 打开回复库，让用户选择字卡作为屏蔽词
+// 打开回复库，让用户选择字卡作为屏蔽词
+window._openBlockwordPickFromReplies = function () {
+    // 1. 强制切换到“主字卡”标签页（只显示文字字卡）
+    if (typeof currentMajorTab !== 'undefined') currentMajorTab = 'reply';
+    if (typeof currentSubTab !== 'undefined') currentSubTab = 'custom';
+
+    // 2. 重置选中状态
+    _blockwordSelectedIndices.clear();
+    _blockwordPickMode = true;
+
+    // 3. 隐藏屏蔽词管理弹窗（避免层级遮挡）
+    const blocklistModal = document.getElementById('blocklist-modal');
+    if (blocklistModal && typeof hideModal === 'function') {
+        hideModal(blocklistModal);
+        window._blocklistModalHidden = true;   // 标记被隐藏
+    }
+
+    // 4. 重新渲染回复库（会进入特殊模式）
+    renderReplyLibrary();
+
+    // 5. 打开回复库模态框
+    const modal = document.getElementById('custom-replies-modal');
+    if (modal && typeof showModal === 'function') showModal(modal);
+};
+
+// 关闭屏蔽词选择模式（恢复回复库正常状态）
+function _exitBlockwordPickMode() {
+    _blockwordPickMode = false;
+    _blockwordSelectedIndices.clear();
+    // 恢复侧边栏
+    const sidebar = document.querySelector('.modal-sidebar');
+    if (sidebar) sidebar.style.display = '';
+    // 恢复主视图样式
+    const mainView = document.querySelector('.modal-main-view');
+    if (mainView) mainView.style.width = '';
+    // 重新渲染回正常模式
+    renderReplyLibrary();
+
+    if (window._blocklistModalHidden) {
+        const blocklistModal = document.getElementById('blocklist-modal');
+        if (blocklistModal && typeof showModal === 'function') showModal(blocklistModal);
+        window._blocklistModalHidden = false;
+    }
+}
+
+// 确认将选中的字卡添加到屏蔽词列表
+function _confirmBlockwordPick() {
+    if (_blockwordSelectedIndices.size === 0) {
+        showNotification('请至少选择一个字卡', 'warning');
+        return;
+    }
+
+    // 获取所有字卡列表
+    const allReplies = customReplies || [];
+    const selectedWords = [];
+    for (let idx of _blockwordSelectedIndices) {
+        if (idx < allReplies.length) {
+            selectedWords.push(allReplies[idx]);
+        }
+    }
+
+    if (selectedWords.length === 0) return;
+
+    // 逐个添加到屏蔽词（去重由 addBlockWord 内部处理）
+    let addedCount = 0;
+    for (let word of selectedWords) {
+        if (window.addBlockWord(word)) {
+            addedCount++;
+        }
+    }
+
+    if (addedCount > 0) {
+        showNotification(`已添加 ${addedCount} 个屏蔽词`, 'success');
+        // 刷新屏蔽词列表（如果弹窗还开着）
+        if (typeof refreshBlocklistUI === 'function') refreshBlocklistUI();
+        // 如果词云或统计面板开着，刷新数据
+        if (document.getElementById('wordcloud-panel') && document.getElementById('wordcloud-panel').style.display !== 'none') {
+            if (typeof renderWordCloud === 'function') renderWordCloud();
+        }
+        if (document.getElementById('stats-panel') && document.getElementById('stats-panel').style.display !== 'none') {
+            if (typeof renderStatsContent === 'function') renderStatsContent();
+        }
+    } else {
+        showNotification('所选字卡已在屏蔽词列表中', 'info');
+    }
+
+    // 关闭模态框并退出选择模式
+    const modal = document.getElementById('custom-replies-modal');
+    if (modal && typeof hideModal === 'function') hideModal(modal);
+    _exitBlockwordPickMode();
+}
+
+// 修改原来的 renderReplyLibrary 函数，在合适位置插入对屏蔽词模式的渲染
+// 注意：我们需要在现有的 renderReplyLibrary 内部增加判断，而不是完全重写。
+// 为了不破坏原有逻辑，我们在原函数最前面加入模式判断，调用专门的渲染函数。
+// 但是为了避免覆盖原有复杂代码，我们采用“猴子补丁”方式：保存原函数，包装它。
+// 下面的代码会自动完成包装，你只需要复制即可。
+(function patchRenderReplyLibrary() {
+    const originalRender = window.renderReplyLibrary;
+    if (!originalRender) return;
+
+    window.renderReplyLibrary = function () {
+        // 如果是屏蔽词选择模式，使用专用渲染
+        if (_blockwordPickMode) {
+            _renderBlockwordPickMode();
+            return;
+        }
+        // 否则调用原来的渲染函数
+        originalRender();
+    };
+
+    function _renderBlockwordPickMode() {
+        const list = document.getElementById('custom-replies-list');
+        const titleEl = document.getElementById('cr-modal-title');
+        if (!list) return;
+
+        // 强制标题
+        if (titleEl) titleEl.textContent = '选择字卡作为屏蔽词';
+
+        // 隐藏原有的“新增”按钮
+        const addBtn = document.getElementById('add-custom-reply');
+        if (addBtn) addBtn.style.display = 'none';
+
+        // ========= 隐藏侧边栏（氛围感、公告） =========
+        const sidebar = document.querySelector('.modal-sidebar');
+        if (sidebar) sidebar.style.display = 'none';
+
+        // 调整主视图样式（让内容区占满）
+        const mainView = document.querySelector('.modal-main-view');
+        if (mainView) mainView.style.width = '100%';
+
+        // ========= 渲染工具栏（保留分组筛选和搜索） =========
+        // 先移除旧的工具栏，重新生成一个定制版
+        let toolbar = document.getElementById('batch-ops-toolbar');
+        if (!toolbar) {
+            toolbar = document.createElement('div');
+            toolbar.id = 'batch-ops-toolbar';
+            list.parentNode.insertBefore(toolbar, list);
+        }
+
+        // 定制工具栏 HTML（只保留搜索、分组筛选，外加确认/取消按钮）
+        const groups = window.customReplyGroups || [];
+        const hasGroups = groups.length > 0;
+        const allCount = customReplies.length;
+        const ungroupedCount = customReplies.filter(item =>
+            !groups.some(g => g.items && g.items.includes(item))
+        ).length;
+
+        let groupFilterHtml = '';
+        if (hasGroups) {
+            groupFilterHtml = `
+        <div id="group-filter-pills" style="
+            display: flex; gap: 6px; overflow-x: auto; padding: 8px 15px;
+            scrollbar-width: none; -webkit-overflow-scrolling: touch; flex-shrink: 0;
+        ">
+            <button class="gfp-btn ${_activeGroupFilter === null ? 'gfp-active' : ''}" data-filter="all">
+                全部 <span class="gfp-count">${allCount}</span>
+            </button>
+            <button class="gfp-btn ${_activeGroupFilter === 'ungrouped' ? 'gfp-active' : ''}" data-filter="ungrouped">
+                未分组 <span class="gfp-count">${ungroupedCount}</span>
+            </button>
+            ${groups.map(g => {
+                const cnt = (g.items || []).filter(item => customReplies.includes(item)).length;
+                return `<button class="gfp-btn ${_activeGroupFilter === g.id ? 'gfp-active' : ''}"
+                        data-filter="${g.id}"
+                        style="${_activeGroupFilter === g.id ? `background:${g.color}22;border-color:${g.color};color:${g.color};` : ''}">
+                        <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${g.color || '#aaa'};margin-right:4px;flex-shrink:0;vertical-align:middle;"></span>
+                        ${g.name} <span class="gfp-count">${cnt}</span>
+                        ${g.disabled ? `<span style="font-size:9px;opacity:0.7;margin-left:2px;">${ICONS.eyeOff}</span>` : ''}
+                    </button>`;
+            }).join('')}
+        </div>`;
+        }
+
+        // 搜索框部分（独立于分组筛选）
+        const searchHtml = `
+        <div style="display: flex; align-items: center; gap: 8px; padding: 10px 15px; border-bottom: 1px solid var(--border-color);">
+            <button class="toolbar-icon-btn" id="tb-search-btn" title="搜索">
+                ${ICONS.search}
+            </button>
+            <div style="flex:1;"></div>
+        </div>
+        <div id="search-input-line" style="display: none; padding: 8px 15px; border-bottom: 1px solid var(--border-color);">
+            <input type="text" id="rl-search-input" placeholder="搜索字卡内容…" autocomplete="off" style="width:100%; padding:7px 12px; border-radius:10px; border:1.5px solid var(--border-color); background:var(--secondary-bg); color:var(--text-primary); font-size:13px;">
+        </div>
+    `;
+
+        toolbar.innerHTML = `
+        <style>
+            .gfp-btn {
+                display: inline-flex; align-items: center; white-space: nowrap;
+                padding: 5px 12px; border-radius: 20px; border: 1.5px solid var(--border-color);
+                background: var(--primary-bg); color: var(--text-secondary);
+                font-size: 12px; cursor: pointer; font-family: var(--font-family);
+                transition: all 0.18s; flex-shrink: 0; gap: 2px;
+            }
+            .gfp-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+            .gfp-btn.gfp-active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+            .gfp-count { font-size: 10px; opacity: 0.7; margin-left: 2px; }
+            .toolbar-icon-btn {
+                width: 34px; height: 34px; border-radius: 10px; border: 1.5px solid var(--border-color);
+                background: var(--primary-bg); color: var(--text-secondary); cursor: pointer;
+                display: flex; align-items: center; justify-content: center;
+                transition: all 0.18s; flex-shrink: 0;
+            }
+            .toolbar-icon-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+            .toolbar-icon-btn.active { background: var(--accent-color); border-color: var(--accent-color); color: #fff; }
+        </style>
+        ${searchHtml}
+        ${groupFilterHtml}
+        <div id="blockword-action-bar" style="display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-top: 1px solid var(--border-color); background: var(--secondary-bg); margin-top: 8px;">
+            <span style="font-size: 13px; color: var(--text-secondary);">已选择 <strong id="blockword-selected-count">0</strong> 个字卡</span>
+            <div style="display: flex; gap: 10px;">
+                <button id="blockword-pick-cancel" class="modal-btn modal-btn-secondary" style="padding: 6px 16px;">取消</button>
+                <button id="blockword-pick-confirm" class="modal-btn modal-btn-primary" style="padding: 6px 16px;">✓ 确认添加为屏蔽词</button>
+            </div>
+        </div>
+    `;
+
+        // 绑定搜索按钮事件
+        const searchBtn = document.getElementById('tb-search-btn');
+        const searchLine = document.getElementById('search-input-line');
+        const searchInput = document.getElementById('rl-search-input');
+        let searchVisible = false;
+        if (searchBtn && searchLine && searchInput) {
+            searchBtn.onclick = () => {
+                searchVisible = !searchVisible;
+                searchLine.style.display = searchVisible ? 'block' : 'none';
+                if (searchVisible) searchInput.focus();
+                else {
+                    _searchQuery = '';
+                    searchInput.value = '';
+                    _renderBlockwordPickMode(); // 重新渲染列表
+                }
+            };
+            searchInput.oninput = (e) => {
+                _searchQuery = e.target.value.toLowerCase();
+                _renderBlockwordPickMode(); // 重新渲染列表
+            };
+        }
+
+        // 绑定分组筛选按钮事件
+        const filterContainer = document.getElementById('group-filter-pills');
+        if (filterContainer) {
+            filterContainer.querySelectorAll('.gfp-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const filter = btn.dataset.filter;
+                    if (filter === 'all') _activeGroupFilter = null;
+                    else if (filter === 'ungrouped') _activeGroupFilter = 'ungrouped';
+                    else _activeGroupFilter = parseInt(filter);
+                    _renderBlockwordPickMode();
+                });
+            });
+        }
+
+        // 绑定确认/取消按钮
+        const confirmBtn = document.getElementById('blockword-pick-confirm');
+        const cancelBtn = document.getElementById('blockword-pick-cancel');
+        if (confirmBtn) confirmBtn.onclick = _confirmBlockwordPick;
+        if (cancelBtn) cancelBtn.onclick = () => {
+            const modal = document.getElementById('custom-replies-modal');
+            if (modal && typeof hideModal === 'function') hideModal(modal);
+            _exitBlockwordPickMode();
+        };
+
+        // ========= 渲染字卡列表（带复选框，支持分组筛选和搜索） =========
+        let items = customReplies || [];
+        // 分组筛选
+        if (_activeGroupFilter === 'ungrouped') {
+            const groupedItems = new Set();
+            (customReplyGroups || []).forEach(g => {
+                (g.items || []).forEach(item => groupedItems.add(item));
+            });
+            items = items.filter(item => !groupedItems.has(item));
+        } else if (_activeGroupFilter && typeof _activeGroupFilter === 'number') {
+            const group = customReplyGroups.find(g => g.id === _activeGroupFilter);
+            if (group && group.items) {
+                items = items.filter(item => group.items.includes(item));
+            } else {
+                items = [];
+            }
+        }
+        // 搜索筛选
+        if (_searchQuery) {
+            items = items.filter(text => text.toLowerCase().includes(_searchQuery));
+        }
+
+        if (items.length === 0) {
+            list.innerHTML = '<div style="padding:40px; text-align:center; color:var(--text-secondary);">没有找到字卡</div>';
+            return;
+        }
+
+        list.innerHTML = '';
+        list.style.display = 'block';
+        items.forEach((text, idx) => {
+            // 注意：idx 是当前筛选后的索引，但 _blockwordSelectedIndices 存储的是原始 customReplies 中的索引
+            const originalIdx = customReplies.indexOf(text);
+            const isSelected = _blockwordSelectedIndices.has(originalIdx);
+            const card = document.createElement('div');
+            card.className = `rl-card ${isSelected ? 'rl-selected' : ''}`;
+            card.style.cssText = 'display:flex; align-items:center; gap:12px; padding:12px 15px; margin-bottom:8px; border-radius:12px; border:1px solid var(--border-color); background:var(--secondary-bg); cursor:pointer;';
+            card.innerHTML = `
+            <div class="rl-batch-check" style="width:20px; height:20px; border-radius:4px; border:1.5px solid ${isSelected ? 'var(--accent-color)' : 'var(--border-color)'}; background:${isSelected ? 'var(--accent-color)' : 'transparent'}; display:flex; align-items:center; justify-content:center;">
+                ${isSelected ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>' : ''}
+            </div>
+            <div style="flex:1; font-size:14px; color:var(--text-primary); word-break:break-all;">${escapeHtml(text)}</div>
+        `;
+            card.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (_blockwordSelectedIndices.has(originalIdx)) {
+                    _blockwordSelectedIndices.delete(originalIdx);
+                } else {
+                    _blockwordSelectedIndices.add(originalIdx);
+                }
+                // 重新渲染
+                _renderBlockwordPickMode();
+            });
+            list.appendChild(card);
+        });
+
+        // 更新已选数量显示
+        const countSpan = document.getElementById('blockword-selected-count');
+        if (countSpan) countSpan.textContent = _blockwordSelectedIndices.size;
+    }
+    // 辅助函数：转义HTML（如果已有全局 escapeHtml 则直接使用）
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/[&<>]/g, function (m) {
+            if (m === '&') return '&amp;';
+            if (m === '<') return '&lt;';
+            if (m === '>') return '&gt;';
+            return m;
+        });
+    }
+})();

@@ -1424,8 +1424,11 @@
 
         <div class="modal" id="stats-modal">
             <div class="modal-content">
-                <div class="modal-title">
-                    <i class="fas fa-chart-bar"></i><span>消息统计 & 收藏</span>
+                <div class="modal-title" style="justify-content: space-between;">
+                    <span><i class="fas fa-chart-bar"></i> 消息统计 & 收藏</span>
+                    <button id="open-blocklist-btn" class="modal-btn modal-btn-secondary" style="padding: 4px 10px; font-size: 12px;">
+                        <i class="fas fa-ban"></i> 屏蔽词管理
+                    </button>
                 </div>
                 <div class="stats-tab-bar" style="display:flex;gap:6px;margin-bottom:14px;background:var(--secondary-bg);border-radius:12px;padding:4px;">
                     <button class="stats-nav-btn active" id="stats-tab-btn" onclick="switchStatsTab('stats')" data-tab="stats">
@@ -1925,7 +1928,7 @@
                         <p style="font-size: 12px; opacity: 0.8;">小红书号：9568228497</p>
                         <p style="font-size: 12px; margin-top: 5px; font-style: italic;">(聊天统计部分代码参考)</p>
                         <p>二改 <strong>@winky</strong></p>
-                        <p style="font-size: 12px; opacity: 0.8;">版本：v1.14 - 更新时间 2026.4.15</p>
+                        <p style="font-size: 12px; opacity: 0.8;">版本：v1.15 - 更新时间 2026.4.16</p>
                     </div>
                     <div style="margin-top: 15px;">
                         <p style="font-weight: bold; color: var(--text-primary); text-align: center;">
@@ -2298,6 +2301,32 @@
                 <div class="modal-buttons">
                     <button class="modal-btn modal-btn-secondary" id="close-character-modal">关闭</button>
                 </div>
+            </div>
+        </div>
+    </div>
+    <!-- 屏蔽词管理弹窗 -->
+    <div class="modal" id="blocklist-modal">
+        <div class="modal-content" style="max-width: 360px;">
+            <div class="modal-title">
+                <i class="fas fa-ban"></i><span>屏蔽词管理</span>
+            </div>
+            <div style="margin-bottom: 12px;">
+                <p style="font-size: 12px; color: var(--text-secondary);">添加后，这些词不会出现在「词云」和「高频词统计」中。</p>
+            </div>
+            <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <input type="text" id="new-blockword" placeholder="输入要屏蔽的词" style="flex: 1; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--primary-bg); color: var(--text-primary);">
+                <button id="add-blockword-btn" class="modal-btn modal-btn-primary" style="padding: 8px 16px;">添加</button>
+            </div>
+            <div style="margin-bottom: 12px;">
+                <button id="add-from-replies-btn" class="modal-btn modal-btn-secondary" style="width: 100%;">
+                    <i class="fas fa-comment-dots"></i> 从字卡库添加
+                </button>
+            </div>
+            <div id="blocklist-container" style="max-height: 200px; overflow-y: auto; margin-bottom: 12px;">
+                <!-- 动态显示屏蔽词列表 -->
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-secondary" id="close-blocklist-modal">关闭</button>
             </div>
         </div>
     </div>
