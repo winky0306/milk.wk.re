@@ -1709,9 +1709,16 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                 }
             }
             if (Math.random() < 0.03) {
-                // 对方的“拍一拍”只使用内置动作，不读取我方自定义拍一拍库
-                if (CONSTANTS.POKE_ACTIONS && CONSTANTS.POKE_ACTIONS.length > 0) {
-                    let randomAction = getRandomItem(CONSTANTS.POKE_ACTIONS);
+                // 拍一拍动作库：优先使用用户自定义的拍一拍库，如果为空则使用系统内置动作
+                let actionPool = [];
+                if (customPokes && customPokes.length > 0) {
+                    actionPool = customPokes;   // 用户在“自定义回复 → 拍一拍”中添加的动作
+                } else if (CONSTANTS.POKE_ACTIONS && CONSTANTS.POKE_ACTIONS.length > 0) {
+                    actionPool = CONSTANTS.POKE_ACTIONS;  // 系统内置动作
+                }
+
+                if (actionPool.length > 0) {
+                    let randomAction = getRandomItem(actionPool);
                     if (typeof window._sanitizePokeTextForDisplay === 'function') {
                         randomAction = window._sanitizePokeTextForDisplay(randomAction);
                     }
@@ -1726,11 +1733,10 @@ if (partnerPersonas && partnerPersonas.length > 0 && Math.random() < 0.3) {
                         type: 'system'
                     });
                     if (typeof playSound === 'function') playSound('partner_poke');
-                (function(){try{if(window._typingIndicatorAutoHideTimer){clearTimeout(window._typingIndicatorAutoHideTimer);window._typingIndicatorAutoHideTimer=null;}}catch(e){}var _tiW=document.getElementById('typing-indicator-wrapper');if(_tiW){var _tiInner=_tiW.querySelector('.typing-indicator');if(_tiInner){_tiInner.classList.add('hiding');setTimeout(function(){_tiW.style.display='none';if(_tiInner)_tiInner.classList.remove('hiding');},240);}else{_tiW.style.display='none';}}})();
-        return;
-    }
-}
-
+                    (function () { try { if (window._typingIndicatorAutoHideTimer) { clearTimeout(window._typingIndicatorAutoHideTimer); window._typingIndicatorAutoHideTimer = null; } } catch (e) { } var _tiW = document.getElementById('typing-indicator-wrapper'); if (_tiW) { var _tiInner = _tiW.querySelector('.typing-indicator'); if (_tiInner) { _tiInner.classList.add('hiding'); setTimeout(function () { _tiW.style.display = 'none'; if (_tiInner) _tiInner.classList.remove('hiding'); }, 240); } else { _tiW.style.display = 'none'; } } })();
+                    return;   // 拍一拍发生后不再继续发送普通回复
+                }
+            }
             const replyCount = Math.random() < 0.75 ? 1: (Math.random() < 0.95 ? 2: 3);
             if (!customReplies || customReplies.length === 0) {
                 showNotification('回复库为空，请先到「自定义回复」中添加内容', 'info', 3500);

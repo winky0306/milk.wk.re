@@ -132,7 +132,7 @@ function generateEnvelopeReplyText() {
     if (!customReplies || customReplies.length === 0) {
         return "暂时不知道说什么好，你可以先去「高级功能 → 自定义回复」里添加一些字卡～";
     }
-    const sourcePool = [...customReplies];
+    const sourcePool = customReplies.filter(r => !disabledItems.has(r) && !disabledGroupItems.has(r));
     const sentenceCount = Math.floor(Math.random() * (12 - 8 + 1)) + 8;
     let replyContent = "";
     for (let i = 0; i < sentenceCount; i++) {

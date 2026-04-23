@@ -25,9 +25,19 @@ async function processAllCharacters() {
 // 已删除 maybeGenerateReplyForCharacter 函数（自动回复）
 
 async function generateReplyForCharacter(char, messages) {
-    if (!customReplies.length) return null;
-    const randomIndex = Math.floor(Math.random() * customReplies.length);
-    return customReplies[randomIndex];
+    let disabledItems = new Set();
+    try {
+        const raw = localStorage.getItem('disabledReplyItems');
+        if (raw) disabledItems = new Set(JSON.parse(raw));
+    } catch (e) { }
+    let disabledGroupItems = new Set();
+    (window.customReplyGroups || []).forEach(g => {
+        if (g.disabled && Array.isArray(g.items)) g.items.forEach(item => disabledGroupItems.add(item));
+    });
+    const availableReplies = customReplies.filter(r => !disabledItems.has(r) && !disabledGroupItems.has(r));
+    if (availableReplies.length === 0) return null;
+    const randomIndex = Math.floor(Math.random() * availableReplies.length);
+    return availableReplies[randomIndex];
 }
 
 async function maybeSendAutoEnvelopeForCharacter(char) {

@@ -170,9 +170,27 @@ function deduplicateContentArray(arr, baseSystemArray = []) {
             }, duration);
         }
 
-        const playSound = (type) => {
-            if (!settings.soundEnabled) return;
-            try {
+let _currentAudioContext = null;
+let _currentAudio = null;
+
+const stopCurrentSound = () => {
+    try {
+        if (_currentAudio) {
+            _currentAudio.pause();
+            _currentAudio.currentTime = 0;
+            _currentAudio = null;
+        }
+        if (_currentAudioContext) {
+            _currentAudioContext.close();
+            _currentAudioContext = null;
+        }
+    } catch (e) { }
+};
+
+const playSound = (type) => {
+    if (!settings.soundEnabled) return;
+    stopCurrentSound();
+    try {
                 // =============== 两方音效配置 ===============
                 const category = (() => {
                     // 新类型（按两方区分）
@@ -219,12 +237,14 @@ function deduplicateContentArray(arr, baseSystemArray = []) {
                 let resolvedCustomUrl = (presetId === 'kakaotalk') ? KAKAO_TALK_URL : resolvedCustomUrlBase;
 
                 // 自定义 URL：只要填了就直接播放（不区分内置/预设）
-                if (resolvedCustomUrl) {
-                    const audio = new Audio(resolvedCustomUrl);
-                    audio.volume = Math.min(1, Math.max(0, settings.soundVolume || 0.15));
-                    audio.play().catch(() => {});
-                    return;
-                }
+        if (resolvedCustomUrl) {
+            const audio = new Audio(resolvedCustomUrl);
+            audio.volume = Math.min(1, Math.max(0, settings.soundVolume || 0.15));
+            _currentAudio = audio;
+            audio.play().catch(() => { });
+            audio.addEventListener('ended', () => { _currentAudio = null; });
+            return;
+        }
 
                 // =============== 内置合成音效（两方 + 预设） ===============
                 const CATEGORY_BASE = {
@@ -269,7 +289,8 @@ function deduplicateContentArray(arr, baseSystemArray = []) {
                     return { osc1Type: 'sine', osc2Type: 'triangle', freq: 600, dur: 0.15, up: 1.05, down: 0.60 };
                 })();
 
-                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        _currentAudioContext = audioContext;
                 const gainNode = audioContext.createGain();
                 const vol = Math.min(0.55, Math.max(0.01, settings.soundVolume || 0.1));
 
@@ -308,7 +329,10 @@ function deduplicateContentArray(arr, baseSystemArray = []) {
                 gainNode.gain.exponentialRampToValueAtTime(0.0001, end);
 
                 osc1.stop(end);
-                osc2.stop(end);
+        osc2.stop(end);
+        audioContext.addEventListener('statechange', () => {
+            if (audioContext.state === 'closed') _currentAudioContext = null;
+        });
             } catch (e) { console.warn("音频播放失败:", e); }
         };
 

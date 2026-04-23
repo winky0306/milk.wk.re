@@ -660,18 +660,32 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
         const el = document.getElementById(id);
         if (el) el.value = val || '';
     };
+    // 音频自定义值显示：base64 数据只显示友好文字
+    const setSoundUrlInput = (id, val) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (val && val.startsWith('data:audio')) {
+            el.value = '[本地文件（已上传）]';
+        } else {
+            el.value = val || '';
+        }
+    };
 
     setSelect('sound-my-send-preset', settings.mySendSoundPreset || 'tone_low');
     setInput('sound-my-send-custom-url', (settings.mySendCustomSoundUrl || '').trim() || legacyCustom);
+    setSoundUrlInput('sound-my-send-custom-url', (settings.mySendCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-partner-message-preset', settings.partnerMessageSoundPreset || 'tone_low');
     setInput('sound-partner-message-custom-url', (settings.partnerMessageCustomSoundUrl || '').trim() || legacyCustom);
+    setSoundUrlInput('sound-partner-message-custom-url', (settings.partnerMessageCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-my-poke-preset', settings.myPokeSoundPreset || 'tone_low');
     setInput('sound-my-poke-custom-url', (settings.myPokeCustomSoundUrl || '').trim() || legacyCustom);
+    setSoundUrlInput('sound-my-poke-custom-url', (settings.myPokeCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-partner-poke-preset', settings.partnerPokeSoundPreset || 'tone_low');
     setInput('sound-partner-poke-custom-url', (settings.partnerPokeCustomSoundUrl || '').trim() || legacyCustom);
+    setSoundUrlInput('sound-partner-poke-custom-url', (settings.partnerPokeCustomSoundUrl || '').trim() || legacyCustom);
     document.querySelectorAll('.time-fmt-opt').forEach(opt => {
         opt.classList.toggle('active', opt.dataset.fmt === (settings.timeFormat || 'HH:mm'));
     });
@@ -1296,6 +1310,11 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
                 if (!el) return;
                 el.addEventListener('change', () => {
                     settings[settingsKey] = el.value.trim();
+                    const val = el.value.trim();
+                    // 如果是本地文件占位文字，不覆盖 settings（保留 base64）
+                    if (val === '[本地文件（已上传）]') return;
+                    // 如果清空了，同时清除可能存在的 base64
+                    settings[settingsKey] = val;
                     throttledSaveData();
                 });
             };
@@ -1304,6 +1323,38 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
             bindCustomUrlInput('sound-partner-message-custom-url', 'partnerMessageCustomSoundUrl');
             bindCustomUrlInput('sound-my-poke-custom-url', 'myPokeCustomSoundUrl');
             bindCustomUrlInput('sound-partner-poke-custom-url', 'partnerPokeCustomSoundUrl');
+
+            // 本地音频文件上传
+            const bindAudioUpload = (btnId, fileInputId, urlInputId, settingsKey, presetSelectId) => {
+                const btn = document.getElementById(btnId);
+                const fileInput = document.getElementById(fileInputId);
+                const urlInput = document.getElementById(urlInputId);
+                if (!btn || !fileInput) return;
+                btn.addEventListener('click', () => fileInput.click());
+                fileInput.addEventListener('change', () => {
+                    const file = fileInput.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const base64 = e.target.result;
+                        settings[settingsKey] = base64;
+                        if (urlInput) urlInput.value = '[本地文件: ' + file.name + ']';
+                        // 将 preset 切换到 custom（如果当前是 mute 则保持，否则不强制切换）
+                        const sel = document.getElementById(presetSelectId);
+                        if (sel && sel.value === 'mute') {
+                            // 保持 mute，用户可手动切换
+                        }
+                        throttledSaveData();
+                    };
+                    reader.readAsDataURL(file);
+                    fileInput.value = ''; // 允许重复选同一文件
+                });
+            };
+
+            bindAudioUpload('upload-sound-my-send-btn', 'upload-sound-my-send-file', 'sound-my-send-custom-url', 'mySendCustomSoundUrl', 'sound-my-send-preset');
+            bindAudioUpload('upload-sound-partner-message-btn', 'upload-sound-partner-message-file', 'sound-partner-message-custom-url', 'partnerMessageCustomSoundUrl', 'sound-partner-message-preset');
+            bindAudioUpload('upload-sound-my-poke-btn', 'upload-sound-my-poke-file', 'sound-my-poke-custom-url', 'myPokeCustomSoundUrl', 'sound-my-poke-preset');
+            bindAudioUpload('upload-sound-partner-poke-btn', 'upload-sound-partner-poke-file', 'sound-partner-poke-custom-url', 'partnerPokeCustomSoundUrl', 'sound-partner-poke-preset');
 
             const btnMySend = document.getElementById('test-sound-my-send-btn');
             if (btnMySend) btnMySend.addEventListener('click', () => playSound('my_send'));
