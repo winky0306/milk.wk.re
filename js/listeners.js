@@ -672,19 +672,15 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
     };
 
     setSelect('sound-my-send-preset', settings.mySendSoundPreset || 'tone_low');
-    setInput('sound-my-send-custom-url', (settings.mySendCustomSoundUrl || '').trim() || legacyCustom);
     setSoundUrlInput('sound-my-send-custom-url', (settings.mySendCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-partner-message-preset', settings.partnerMessageSoundPreset || 'tone_low');
-    setInput('sound-partner-message-custom-url', (settings.partnerMessageCustomSoundUrl || '').trim() || legacyCustom);
     setSoundUrlInput('sound-partner-message-custom-url', (settings.partnerMessageCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-my-poke-preset', settings.myPokeSoundPreset || 'tone_low');
-    setInput('sound-my-poke-custom-url', (settings.myPokeCustomSoundUrl || '').trim() || legacyCustom);
     setSoundUrlInput('sound-my-poke-custom-url', (settings.myPokeCustomSoundUrl || '').trim() || legacyCustom);
 
     setSelect('sound-partner-poke-preset', settings.partnerPokeSoundPreset || 'tone_low');
-    setInput('sound-partner-poke-custom-url', (settings.partnerPokeCustomSoundUrl || '').trim() || legacyCustom);
     setSoundUrlInput('sound-partner-poke-custom-url', (settings.partnerPokeCustomSoundUrl || '').trim() || legacyCustom);
     document.querySelectorAll('.time-fmt-opt').forEach(opt => {
         opt.classList.toggle('active', opt.dataset.fmt === (settings.timeFormat || 'HH:mm'));
@@ -1309,7 +1305,6 @@ if (_chatSettingsEl) _chatSettingsEl.addEventListener('click', () => {
                 const el = document.getElementById(inputId);
                 if (!el) return;
                 el.addEventListener('change', () => {
-                    settings[settingsKey] = el.value.trim();
                     const val = el.value.trim();
                     // 如果是本地文件占位文字，不覆盖 settings（保留 base64）
                     if (val === '[本地文件（已上传）]') return;

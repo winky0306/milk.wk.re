@@ -1,7 +1,7 @@
 {
   "name": "Milk",
   "short_name": "Milk",
-  "description": "Milk",
+  "description": "与梦角的专属聊天空间",
   "start_url": ".",
   "display": "standalone",
   "theme_color": "#000000",
