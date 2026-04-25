@@ -1547,21 +1547,11 @@ async function refreshCloudSyncInfo() {
 
 // 保留原有的 markLocalBackupUpdated 并在数据变更时调用
 window.markLocalBackupUpdated = async function (reason) {
-    // 每次数据变化，重新生成本地快照元数据（不实际上传）
-    try {
-        const zipBlob = await generateZipBlobFromLocal();
-        const meta = {
-            updated_at: new Date().toISOString(),
-            size_bytes: zipBlob.size,
-            hash: await calcBlobSha256(zipBlob),
-            source: reason || 'local-edit'
-        };
-        setCloudSyncMeta(meta);
-        cloudAutoSyncDirty = true;
-        updateCloudSyncStatusUI({ statusText: getCloudAutoSyncStatusText() });
-    } catch (e) { console.warn(e); }
+    // 仅标记数据已变更，不立即打包（避免反复生成 ZIP）
+    cloudAutoSyncDirty = true;
+    updateCloudSyncStatusUI({ statusText: getCloudAutoSyncStatusText() });
+    if (reason) console.log(`[数据变更] ${reason}，已标记待同步，下次云同步时会自动打包`);
 };
-
 window.openSupabaseGuide = async function(openWebsite) {
     if (openWebsite) {
         try {
