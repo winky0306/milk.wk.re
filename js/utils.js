@@ -867,32 +867,7 @@ function formatCloudSyncTime(ts) {
     }
 }
 
-async function buildFullBackupPayloadObject() {
-    if (typeof ChatBackup !== 'undefined' && ChatBackup.buildBackupPayload) {
-        return await ChatBackup.buildBackupPayload({
-            inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
-            inclThemes: true, inclDg: true, inclStickers: true
-        });
-    }
-    const keys = await localforage.keys();
-    const idbData = {};
-    for (const k of keys) { try { idbData[k] = await localforage.getItem(k); } catch(e) {} }
-    const lsData = {};
-    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k) lsData[k] = localStorage.getItem(k); }
-    return {
-        version: '3.1-full', appName: 'ChatApp', exportDate: new Date().toISOString(),
-        type: 'full', indexedDB: idbData, localStorage: lsData
-    };
-}
 
-async function buildFullBackupJsonString() {
-    const payload = await buildFullBackupPayloadObject();
-    const jsonString = JSON.stringify(payload);
-    if (jsonString.charCodeAt(0) === 0xFEFF) {
-        return jsonString.substring(1);
-    }
-    return jsonString;
-}
 
 async function calcTextSha256(text) {
     try {
@@ -1032,34 +1007,38 @@ async function ensureSupabaseTableGuide() {
         if (!modal || !sqlDisplay || !closeBtn) return resolve();
 
         const sqlCode = `-- =============================================
--- 1. 清理旧表（如果存在），避免冲突
+-- 1. 删除旧表（如果存在）
 -- =============================================
 DROP TABLE IF EXISTS public.chat_backups;
 
 -- =============================================
--- 2. 创建备份表（字段类型正确，支持大 JSON）
+-- 2. 创建新表：只存储元数据和文件路径
 -- =============================================
 CREATE TABLE public.chat_backups (
-  id TEXT PRIMARY KEY,
-  backup_json JSONB,           -- 存储完整备份数据
-  updated_at TIMESTAMPTZ,      -- 最后更新时间
-  size_bytes BIGINT,           -- 备份大小（字节）
-  hash TEXT,                   -- 备份内容的 SHA-256 哈希
-  source TEXT                  -- 来源标记（如 "local-edit" / "cloud-push"）
+  id            TEXT PRIMARY KEY,           -- 固定为 'SINGLE_USER_BACKUP'
+  file_path     TEXT NOT NULL,              -- Storage 中的文件路径，如 'backups/backup_2026-04-25.zip'
+  bucket_name   TEXT NOT NULL DEFAULT 'chat-backups',
+  updated_at    TIMESTAMPTZ,
+  size_bytes    BIGINT,
+  hash          TEXT,
+  source        TEXT
 );
 
--- =============================================
--- 3. 关闭行级安全策略（允许应用自由读写）
--- =============================================
+-- 允许所有用户读写（RLS 保持关闭）
 ALTER TABLE public.chat_backups DISABLE ROW LEVEL SECURITY;
 
 -- =============================================
--- 4. 【关键】增加数据库语句执行超时时间 → 解决上传大备份超时
+-- 3. 创建 Storage Bucket（对象存储）
 -- =============================================
-ALTER ROLE authenticator SET statement_timeout = '300s';
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('chat-backups', 'chat-backups', true)
+ON CONFLICT (id) DO NOTHING;
 
--- 让超时设置立即生效（无需重启数据库）
-NOTIFY SIGHUP;`;
+-- 允许匿名上传/下载（开发阶段方便，生产可收紧）
+CREATE POLICY "允许所有人上传备份" ON storage.objects FOR INSERT TO authenticated, anon WITH CHECK (bucket_id = 'chat-backups');
+CREATE POLICY "允许所有人下载备份" ON storage.objects FOR SELECT TO authenticated, anon USING (bucket_id = 'chat-backups');
+CREATE POLICY "允许所有人更新备份" ON storage.objects FOR UPDATE TO authenticated, anon USING (bucket_id = 'chat-backups');
+CREATE POLICY "允许所有人删除旧备份" ON storage.objects FOR DELETE TO authenticated, anon USING (bucket_id = 'chat-backups');`;
         
         sqlDisplay.value = sqlCode;
 
@@ -1083,137 +1062,7 @@ async function fetchCloudBackupMeta() {
     if (ret.error) throw ret.error;
     return ret.data || null;
 }
-async function fetchCloudBackupRow() {
-    const client = getSupabaseClient();
-    if (!client) return null;
-    const ret = await client
-        .from('chat_backups')
-        .select('id,backup_json,updated_at,size_bytes,hash,source')
-        .eq('id', CLOUD_SYNC_SINGLE_BACKUP_ID)
-        .maybeSingle();  // 替换 .single() 为 .maybeSingle()
-    if (ret.error) throw ret.error;
-    return ret.data || null;
-}
-async function uploadLocalSnapshotToCloud(reason, options) {
-    const client = getSupabaseClient();
-    if (!client) throw new Error('尚未配置 Supabase');
 
-    const opts = options || {};
-    // ===== 1. 构建备份时强制压缩/缩减图片尺寸（减少 JSON 体积）=====
-    let payloadObject = await buildFullBackupPayloadObject();
-
-    // 如果媒体库（图片）太大，自动压缩到 5KB 以内，且对所有大于 8KB 的图片都压缩
-    if (payloadObject.mediaStore && Object.keys(payloadObject.mediaStore).length > 0) {
-        console.log('[云备份] 检测到图片资源，正在压缩...');
-        for (let id in payloadObject.mediaStore) {
-            let imgUrl = payloadObject.mediaStore[id];
-            // 判断是否为 base64 图片，且大小超过 8KB
-            if (imgUrl && imgUrl.startsWith('data:image/')) {
-                const originalSizeKB = Math.ceil((imgUrl.length * 0.75) / 1024);
-                if (originalSizeKB > 8) {  // 大于 8KB 就压缩
-                    try {
-                        // 目标 5KB，最低质量 0.02，最大宽度 160
-                        const compressed = await compressImageToTarget(imgUrl, 5, 0.02, 160);
-                        payloadObject.mediaStore[id] = compressed;
-                        console.log(`[云备份] 图片压缩: ${originalSizeKB}KB → ${Math.ceil((compressed.length * 0.75) / 1024)}KB`);
-                    } catch (e) { console.warn('单张图片压缩失败，保留原图', e); }
-                }
-            }
-        }
-    }
-
-    const jsonForMeta = JSON.stringify(payloadObject);
-    const meta = {
-        updated_at: new Date().toISOString(),
-        size_bytes: new Blob([jsonForMeta]).size,
-        hash: await calcTextSha256(jsonForMeta),
-        source: reason || 'cloud-push'
-    };
-
-    // 如果备份体积超过 4MB，给出警告并建议手动配置超时
-    if (meta.size_bytes > 4 * 1024 * 1024) {
-        console.warn('[云备份] 备份体积较大(' + (meta.size_bytes / 1024 / 1024).toFixed(1) + 'MB)，可能超时。建议按方案一增加数据库超时。');
-        if (!opts.silent && typeof showNotification === 'function') {
-            showNotification('备份较大（含大量图片），上传可能需要较长时间，请勿关闭页面', 'info', 5000);
-        }
-    }
-
-    const dbPayload = {
-        id: CLOUD_SYNC_SINGLE_BACKUP_ID,
-        backup_json: payloadObject,
-        updated_at: meta.updated_at,
-        size_bytes: meta.size_bytes,
-        hash: meta.hash,
-        source: meta.source
-    };
-
-    // ===== 2. 增加超时重试机制 =====
-    let retryCount = 0;
-    const maxRetries = 2;
-    let lastError = null;
-
-    while (retryCount <= maxRetries) {
-        try {
-            const ret = await client
-                .from('chat_backups')
-                .upsert(dbPayload)
-                .select('updated_at,size_bytes,hash,source')
-                .single();
-
-            if (ret.error) throw ret.error;
-
-            setCloudSyncMeta(meta);
-            if (!opts.silent) {
-                updateCloudSyncStatusUI({
-                    statusText: '云端已连接，最近一次已上传',
-                    localMeta: meta,
-                    cloudMeta: ret.data
-                });
-            }
-            return ret.data;
-        } catch (err) {
-            lastError = err;
-            retryCount++;
-            if (retryCount <= maxRetries && err.message && err.message.includes('timeout')) {
-                console.log(`[云备份] 上传超时，第 ${retryCount} 次重试...`);
-                if (typeof showNotification === 'function') {
-                    showNotification(`上传超时，正在重试 (${retryCount}/${maxRetries})...`, 'warning', 2000);
-                }
-                await new Promise(r => setTimeout(r, 2000 * retryCount)); // 等待2秒再重试
-            } else {
-                break;
-            }
-        }
-    }
-
-    throw lastError || new Error('上传失败，多次重试后依然超时');
-}
-
-async function applyCloudJsonToLocal(jsonData) {
-    let data = jsonData;
-    if (typeof data === 'string') {
-        try {
-            data = JSON.parse(data);
-        } catch (e) {
-            throw new Error('云端 JSON 已损坏');
-        }
-    }
-    
-    if (typeof ChatBackup === 'undefined' || !ChatBackup.applyBackupToStorage) {
-        throw new Error('备份模块未加载');
-    }
-    await ChatBackup.applyBackupToStorage(data, { selective: false });
-
-    const jsonTextForMeta = JSON.stringify(data);
-    const meta = {
-        updated_at: new Date().toISOString(),
-        size_bytes: new Blob([jsonTextForMeta]).size,
-        hash: await calcTextSha256(jsonTextForMeta),
-        source: 'cloud-pull'
-    };
-    setCloudSyncMeta(meta);
-    return meta;
-}
 
 function pickSyncDirectionManually(localMeta, cloudMeta) {
     return new Promise((resolve) => {
@@ -1278,7 +1127,337 @@ function pickSyncDirectionManually(localMeta, cloudMeta) {
     });
 }
 
+// ==================== 方案三：Storage ZIP 备份 ====================
+const BACKUP_BUCKET = 'chat-backups';
+const BACKUP_ID = 'SINGLE_USER_BACKUP';
+
+/**
+ * 生成当前完整备份的 ZIP Blob（不落盘，直接内存 Blob）
+ */
+async function generateZipBlobFromLocal() {
+    if (typeof ChatBackup === 'undefined' || !ChatBackup.exportBackupToFile) {
+        throw new Error('备份模块未加载');
+    }
+    // 复用现有的 ZIP 生成逻辑，但要求返回 Blob 而不是下载
+    return new Promise((resolve, reject) => {
+        const originalDownload = window.downloadFileFallback;
+        const originalShare = navigator.share;
+        let zipBlob = null;
+        // 临时拦截下载行为
+        window.downloadFileFallback = (blob, name) => { zipBlob = blob; resolve(blob); };
+        navigator.share = () => Promise.reject('intercept');
+        ChatBackup.exportBackupToFile({
+            inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
+            inclThemes: true, inclDg: true, inclStickers: true
+        }).catch(e => reject(e)).finally(() => {
+            window.downloadFileFallback = originalDownload;
+            navigator.share = originalShare;
+            if (!zipBlob) reject(new Error('未能拿到 ZIP Blob'));
+        });
+    });
+}
+
+/**
+ * 上传 ZIP 到 Storage，并更新数据库记录
+ */
+async function uploadZipToStorage(zipBlob, reason) {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Supabase 未配置');
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = `backups/backup_${timestamp}.zip`;
+    const { data: uploadData, error: uploadError } = await supabase.storage
+        .from(BACKUP_BUCKET)
+        .upload(filePath, zipBlob, { cacheControl: '3600', upsert: false });
+    if (uploadError) throw uploadError;
+
+    // 计算 SHA-256
+    const hash = await calcBlobSha256(zipBlob);
+    const size_bytes = zipBlob.size;
+
+    const { error: upsertError } = await supabase
+        .from('chat_backups')
+        .upsert({
+            id: BACKUP_ID,
+            file_path: filePath,
+            bucket_name: BACKUP_BUCKET,
+            updated_at: new Date().toISOString(),
+            size_bytes: size_bytes,
+            hash: hash,
+            source: reason || 'cloud-push'
+        }, { onConflict: 'id' });
+    if (upsertError) throw upsertError;
+
+    // 删除旧的备份文件（只保留最新的一个）
+    try {
+        const { data: oldRow } = await supabase
+            .from('chat_backups')
+            .select('file_path')
+            .eq('id', BACKUP_ID)
+            .single();
+        if (oldRow && oldRow.file_path !== filePath) {
+            await supabase.storage.from(BACKUP_BUCKET).remove([oldRow.file_path]);
+        }
+    } catch (e) { console.warn('清理旧备份失败', e); }
+
+    return { filePath, size_bytes, hash, updated_at: new Date().toISOString() };
+}
+
+/**
+ * 从 Storage 下载最新的 ZIP 备份并返回 ArrayBuffer
+ */
+async function downloadLatestZipFromStorage() {
+    const supabase = getSupabaseClient();
+    if (!supabase) throw new Error('Supabase 未配置');
+
+    const { data: meta, error: metaError } = await supabase
+        .from('chat_backups')
+        .select('file_path')
+        .eq('id', BACKUP_ID)
+        .single();
+    if (metaError) throw new Error('云端无备份记录');
+    const { data: fileData, error: downloadError } = await supabase.storage
+        .from(BACKUP_BUCKET)
+        .download(meta.file_path);
+    if (downloadError) throw downloadError;
+    return await fileData.arrayBuffer();
+}
+
+/**
+ * 计算 Blob 的 SHA-256 (用于比对)
+ */
+async function calcBlobSha256(blob) {
+    if (!window.crypto || !window.crypto.subtle) return '';
+    const buffer = await blob.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 辅助函数：将 data: URL 转换为二进制数据（从 backup-engine 复制过来）
+const MIN_MEDIA_CHARS = 800;
+function dataUrlToBinary(dataUrl) {
+    if (typeof dataUrl !== 'string') return null;
+    var m = /^data:([^,]+),([\s\S]*)$/.exec(dataUrl);
+    if (!m) return null;
+    var header = m[1];
+    var body = m[2].replace(/\s/g, '');
+    var mime = header.split(';')[0].trim();
+    var isB64 = /;base64/i.test(header);
+    if (isB64) {
+        try {
+            var binary = atob(body);
+            var len = binary.length;
+            var bytes = new Uint8Array(len);
+            for (var i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+            return { mime: mime, bytes: bytes };
+        } catch (e) {
+            return null;
+        }
+    }
+    try {
+        return { mime: mime, bytes: new TextEncoder().encode(decodeURIComponent(body)) };
+    } catch (e2) {
+        return null;
+    }
+}
+
+// ==================== 图片压缩工具（压缩到指定大小内，单位 KB）====================
+async function compressImageToTarget(dataUrl, targetKB = 5, minQuality = 0.05, maxWidth = 200) {
+    return new Promise((resolve, reject) => {
+        if (!dataUrl || !dataUrl.startsWith('data:image/')) {
+            return resolve(dataUrl); // 非图片直接返回
+        }
+        const img = new Image();
+        img.onload = () => {
+            let width = img.width;
+            let height = img.height;
+            // 等比缩放到 maxWidth 以内（最长边不超过 maxWidth）
+            if (width > maxWidth) {
+                height = height * (maxWidth / width);
+                width = maxWidth;
+            }
+            if (height > maxWidth) {
+                width = width * (maxWidth / height);
+                height = maxWidth;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // 质量从 0.9 开始递减，直到文件大小 <= targetKB
+            let quality = 0.9;
+            const doCompress = () => {
+                let compressed = canvas.toDataURL('image/jpeg', quality);
+                let estimatedKB = Math.ceil((compressed.length * 0.75) / 1024);
+                if (estimatedKB > targetKB && quality > minQuality) {
+                    quality -= 0.05;
+                    doCompress();
+                } else {
+                    resolve(compressed);
+                }
+            };
+            doCompress();
+        };
+        img.onerror = (err) => {
+            console.warn('图片压缩失败，保留原图', err);
+            resolve(dataUrl);
+        };
+        img.src = dataUrl;
+    });
+}
+
+/**
+ * 上传本地快照到云端（覆盖旧备份）
+ */
+async function uploadLocalSnapshotToCloud(reason, options = {}) {
+    const silent = options.silent;
+    if (!silent && typeof showNotification === 'function') {
+        showNotification('正在压缩图片并打包上传…', 'info', 3000);
+    }
+
+    // ---------- 1. 先获取原始备份数据（含未压缩的图片）----------
+    let rawPayload = await ChatBackup.buildBackupPayload({
+        inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
+        inclThemes: true, inclDg: true, inclStickers: true
+    });
+
+    // ---------- 2. 压缩 mediaStore 中的所有图片（目标 ≤5KB）----------
+    if (rawPayload.mediaStore && Object.keys(rawPayload.mediaStore).length > 0) {
+        console.log('[云备份] 开始压缩图片（目标 ≤5KB）');
+        for (let id in rawPayload.mediaStore) {
+            let imgUrl = rawPayload.mediaStore[id];
+            if (imgUrl && imgUrl.startsWith('data:image/')) {
+                const originalKB = Math.ceil((imgUrl.length * 0.75) / 1024);
+                if (originalKB > 5) {
+                    try {
+                        const compressed = await compressImageToTarget(imgUrl, 5, 0.03, 200);
+                        rawPayload.mediaStore[id] = compressed;
+                        const newKB = Math.ceil((compressed.length * 0.75) / 1024);
+                        console.log(`[云备份] 图片压缩: ${originalKB}KB → ${newKB}KB`);
+                    } catch (e) {
+                        console.warn('单张图片压缩失败，保留原图', e);
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- 3. 用压缩后的 payload 生成 ZIP Blob ----------
+    let zipBlob = null;
+    if (typeof JSZip !== 'undefined') {
+        try {
+            const zip = new JSZip();
+            const store = rawPayload.mediaStore || {};
+            const mediaIndex = {};
+            for (let sid in store) {
+                if (!Object.prototype.hasOwnProperty.call(store, sid)) continue;
+                let url = store[sid];
+                let parts = dataUrlToBinary(url);
+                let path = 'media/' + sid;
+                if (parts && parts.bytes && parts.bytes.length) {
+                    zip.file(path, parts.bytes, { binary: true });
+                    mediaIndex[sid] = { path: path, mime: parts.mime };
+                } else {
+                    let txtPath = path + '.txt';
+                    zip.file(txtPath, String(url));
+                    mediaIndex[sid] = { path: txtPath, mime: 'text/plain+dataurl' };
+                }
+            }
+            const jsonBody = {
+                type: 'chatapp-backup-v5',
+                formatVersion: 5,
+                appName: rawPayload.appName || 'ChatApp',
+                timestamp: rawPayload.timestamp,
+                sessionId: rawPayload.sessionId,
+                appPrefix: rawPayload.appPrefix,
+                modules: rawPayload.modules,
+                localforage: rawPayload.localforage,
+                localStorage: rawPayload.localStorage,
+                mediaIndex: mediaIndex
+            };
+            zip.file('backup.json', '\uFEFF' + JSON.stringify(jsonBody));
+            zipBlob = await zip.generateAsync({
+                type: 'blob',
+                compression: 'DEFLATE',
+                compressionOptions: { level: 6 }
+            });
+        } catch (zipErr) {
+            console.error('[云备份] ZIP 生成失败，回退到未压缩版本', zipErr);
+            zipBlob = await generateZipBlobFromLocal(); // 降级方案
+        }
+    } else {
+        // 没有 JSZip 时降级
+        zipBlob = await generateZipBlobFromLocal();
+    }
+
+    // ---------- 4. 上传到云端 ----------
+    const result = await uploadZipToStorage(zipBlob, reason);
+    const meta = {
+        updated_at: result.updated_at,
+        size_bytes: result.size_bytes,
+        hash: result.hash,
+        source: reason
+    };
+    setCloudSyncMeta(meta);
+    if (!silent && typeof showNotification === 'function') {
+        showNotification('云端备份已更新（图片已自动压缩至5KB内）', 'success');
+    }
+    return result;
+}
+/**
+ * 从云端下载 ZIP 并恢复到本地（完全覆盖）
+ */
+async function applyCloudZipToLocal() {
+    const ab = await downloadLatestZipFromStorage();
+    if (typeof ChatBackup === 'undefined' || !ChatBackup.loadBackupFromArrayBuffer || !ChatBackup.applyBackupToStorage) {
+        throw new Error('备份模块未加载');
+    }
+    const data = await ChatBackup.loadBackupFromArrayBuffer(ab);
+    await ChatBackup.applyBackupToStorage(data, { selective: false });
+    // 更新本地元数据
+    const zipBlob = new Blob([ab]);
+    const meta = {
+        updated_at: new Date().toISOString(),
+        size_bytes: zipBlob.size,
+        hash: await calcBlobSha256(zipBlob),
+        source: 'cloud-pull'
+    };
+    setCloudSyncMeta(meta);
+    return meta;
+}
+
+/**
+ * 获取云端备份的元数据（不下载文件）
+ */
+async function fetchCloudBackupMeta() {
+    const supabase = getSupabaseClient();
+    if (!supabase) return null;
+    const { data, error } = await supabase
+        .from('chat_backups')
+        .select('updated_at,size_bytes,hash,source,file_path')
+        .eq('id', BACKUP_ID)
+        .single();
+    if (error) {
+        if (error.code === 'PGRST116') return null; // 无记录
+        throw error;
+    }
+    return data;
+}
+
+/**
+ * 手动同步：比较本地与云端，让用户选择方向
+ */
 async function compareAndSyncCloudBackup() {
+    // 🔽 新增：强制用当前真实数据生成新的本地指纹
+    if (typeof window.forceRefreshLocalMeta === 'function') {
+        await window.forceRefreshLocalMeta();
+    } else {
+        console.warn('forceRefreshLocalMeta 未找到，使用原有逻辑');
+    }
+    // ⬆️ 新增结束
     let client = getSupabaseClient();
     if (!client) {
         await ensureSupabaseTableGuide();
@@ -1292,106 +1471,63 @@ async function compareAndSyncCloudBackup() {
         }
     }
 
-    const localBuilt = await buildLocalSnapshotMeta('local-snapshot');
-    let cloudRow = await fetchCloudBackupRow();
+    // 获取本地元数据（上次同步时间）
+    let localMeta = getCloudSyncMeta();
+    if (!localMeta || !localMeta.updated_at) {
+        // 尝试从当前数据生成一个临时 hash
+        const zipBlob = await generateZipBlobFromLocal();
+        localMeta = {
+            updated_at: new Date().toISOString(),
+            size_bytes: zipBlob.size,
+            hash: await calcBlobSha256(zipBlob),
+            source: 'local-current'
+        };
+        setCloudSyncMeta(localMeta);
+    }
 
-    if (!cloudRow) {
-        if (confirm('云端还没有任何备份。是否要将当前的本地数据作为第一份备份上传？')) {
+    let cloudMeta = null;
+    try {
+        cloudMeta = await fetchCloudBackupMeta();
+    } catch (e) {
+        console.warn(e);
+        cloudMeta = null;
+    }
+
+    // 无云端备份 -> 询问上传
+    if (!cloudMeta) {
+        if (confirm('云端没有任何备份，是否将当前本地数据上传？')) {
             await uploadLocalSnapshotToCloud('first-sync-push');
-            showNotification('首次同步完成：本地数据已成功上传到云端。', 'success', 4000);
-        } else {
-            showNotification('已取消首次备份。', 'info');
+            showNotification('首次备份上传成功', 'success');
         }
         return;
     }
 
-    const cloudMeta = {
-        updated_at: cloudRow.updated_at,
-        size_bytes: cloudRow.size_bytes,
-        hash: cloudRow.hash,
-        source: cloudRow.source || 'cloud'
-    };
-
-    const localTime = new Date(localBuilt.meta.updated_at || 0).getTime();
-    const cloudTime = new Date(cloudMeta.updated_at || 0).getTime();
-
-    if (!localBuilt.meta.updated_at || !cloudMeta.updated_at) {
-        const direction = await pickSyncDirectionManually(localBuilt.meta, cloudMeta);
-        if (direction === 'push') {
-            await uploadLocalSnapshotToCloud('manual-push');
-            showNotification('已用本地覆盖云端', 'success');
-        } else if (direction === 'pull') {
-            const newLocalMeta = await applyCloudJsonToLocal(cloudRow.backup_json);
-            updateCloudSyncStatusUI({
-                statusText: '云端已连接，最近一次已下载',
-                localMeta: newLocalMeta,
-                cloudMeta: cloudMeta
-            });
-            showNotification('已用云端覆盖本地，正在刷新页面', 'success', 2500);
-            setTimeout(() => location.reload(), 2200);
-        }
-        return;
-    }
-
-    if (localBuilt.meta.hash && cloudMeta.hash && localBuilt.meta.hash === cloudMeta.hash) {
-        updateCloudSyncStatusUI({
-            statusText: '本地与云端一致',
-            localMeta: localBuilt.meta,
-            cloudMeta: cloudMeta
-        });
+    // 哈希相同 -> 一致
+    if (localMeta.hash && cloudMeta.hash && localMeta.hash === cloudMeta.hash) {
         showNotification('本地与云端数据一致', 'info');
+        refreshCloudSyncInfo();
         return;
     }
 
-    let direction = null;
-    if (cloudTime > localTime && cloudMeta.size_bytes >= localBuilt.meta.size_bytes) direction = 'pull';
-    if (localTime > cloudTime && localBuilt.meta.size_bytes >= cloudMeta.size_bytes) direction = 'push';
-
-    if (!direction) {
-        direction = await pickSyncDirectionManually(localBuilt.meta, cloudMeta);
-        if (!direction) {
-            showNotification('已取消同步', 'info');
-            return;
-        }
-    } else {
-        const ask = confirm(
-            direction === 'pull'
-                ? '检测到云端看起来更新。\n\n点击“确定”用云端覆盖本地；点击“取消”改为手动选择方向。'
-                : '检测到本地看起来更新。\n\n点击“确定”用本地覆盖云端；点击“取消”改为手动选择方向。'
-        );
-        if (!ask) direction = await pickSyncDirectionManually(localBuilt.meta, cloudMeta);
-        if (!direction) return;
-    }
-
+    // 让用户选择方向
+    const direction = await pickSyncDirectionManually(localMeta, cloudMeta);
     if (direction === 'push') {
-        const cloudSaved = await uploadLocalSnapshotToCloud('manual-push');
-        updateCloudSyncStatusUI({
-            statusText: '云端已连接，最近一次已上传',
-            localMeta: localBuilt.meta,
-            cloudMeta: cloudSaved
-        });
-        showNotification('同步成功：本地已上传到云端', 'success');
-        return;
-    }
-
-    if (direction === 'pull') {
-        const newLocalMeta = await applyCloudJsonToLocal(cloudRow.backup_json);
-        updateCloudSyncStatusUI({
-            statusText: '云端已连接，最近一次已下载',
-            localMeta: newLocalMeta,
-            cloudMeta: cloudMeta
-        });
-        showNotification('同步成功：云端已覆盖本地，正在刷新页面', 'success', 2600);
-        setTimeout(() => location.reload(), 2200);
+        await uploadLocalSnapshotToCloud('manual-push');
+        showNotification('已用本地覆盖云端', 'success');
+    } else if (direction === 'pull') {
+        await applyCloudZipToLocal();
+        showNotification('已用云端覆盖本地，即将刷新', 'success');
+        setTimeout(() => location.reload(), 2000);
     }
 }
 
+/**
+ * 刷新 UI 上的云同步状态
+ */
 async function refreshCloudSyncInfo() {
     const cfg = getCloudSyncConfig();
     if (!cfg) {
-        updateCloudSyncStatusUI({
-            statusText: '还没有连接云端备份，点这里开始设置'
-        });
+        updateCloudSyncStatusUI({ statusText: '还没有连接云端备份，点这里开始设置' });
         return;
     }
     try {
@@ -1404,12 +1540,27 @@ async function refreshCloudSyncInfo() {
             cloudMeta: cloudMeta
         });
     } catch (e) {
-        console.error('[refreshCloudSyncInfo]', e);
-        updateCloudSyncStatusUI({
-            statusText: '连接云端失败，请检查配置或网络'
-        });
+        console.error(e);
+        updateCloudSyncStatusUI({ statusText: '连接云端失败，请检查配置或网络' });
     }
 }
+
+// 保留原有的 markLocalBackupUpdated 并在数据变更时调用
+window.markLocalBackupUpdated = async function (reason) {
+    // 每次数据变化，重新生成本地快照元数据（不实际上传）
+    try {
+        const zipBlob = await generateZipBlobFromLocal();
+        const meta = {
+            updated_at: new Date().toISOString(),
+            size_bytes: zipBlob.size,
+            hash: await calcBlobSha256(zipBlob),
+            source: reason || 'local-edit'
+        };
+        setCloudSyncMeta(meta);
+        cloudAutoSyncDirty = true;
+        updateCloudSyncStatusUI({ statusText: getCloudAutoSyncStatusText() });
+    } catch (e) { console.warn(e); }
+};
 
 window.openSupabaseGuide = async function(openWebsite) {
     if (openWebsite) {
@@ -1444,16 +1595,6 @@ window.syncSupabaseCloud = async function() {
     }
 };
 
-window.markLocalBackupUpdated = async function(reason) {
-    try {
-        await buildLocalSnapshotMeta(reason || 'local-edit');
-        cloudAutoSyncDirty = true;
-        if (typeof window.syncCloudAutoSyncSettingsUI === 'function') {
-            window.syncCloudAutoSyncSettingsUI();
-        }
-        updateCloudSyncStatusUI({ statusText: getCloudAutoSyncStatusText() });
-    } catch (e) {}
-};
 
 document.addEventListener('DOMContentLoaded', function() {
     setTimeout(function() {
@@ -1712,4 +1853,24 @@ window.filterBlockedWords = function (wordsArray) {
     if (blocklist.length === 0) return wordsArray;
     return wordsArray.filter(w => !blocklist.includes(w));
 };
-// =========================================================================
+
+
+// 强制刷新本地备份元数据（用于对比前更新指纹）
+window.forceRefreshLocalMeta = async function (reason) {
+    try {
+        const zipBlob = await generateZipBlobFromLocal();   // 生成当前数据的 ZIP 包
+        const meta = {
+            updated_at: new Date().toISOString(),
+            size_bytes: zipBlob.size,
+            hash: await calcBlobSha256(zipBlob),            // 计算哈希值
+            source: reason || 'manual-refresh'
+        };
+        setCloudSyncMeta(meta);      // 保存到 localStorage
+        cloudAutoSyncDirty = true;   // 标记有未同步的变更
+        updateCloudSyncStatusUI({ statusText: getCloudAutoSyncStatusText() });
+        return meta;
+    } catch (e) {
+        console.warn('[forceRefreshLocalMeta] 刷新失败', e);
+        return null;
+    }
+};
