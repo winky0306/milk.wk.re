@@ -1134,29 +1134,62 @@ const BACKUP_ID = 'SINGLE_USER_BACKUP';
 /**
  * 生成当前完整备份的 ZIP Blob（不落盘，直接内存 Blob）
  */
+// ==================== 替换原有的 generateZipBlobFromLocal ====================
 async function generateZipBlobFromLocal() {
-    if (typeof ChatBackup === 'undefined' || !ChatBackup.exportBackupToFile) {
+    if (typeof ChatBackup === 'undefined' || !ChatBackup.buildBackupPayload) {
         throw new Error('备份模块未加载');
     }
-    // 复用现有的 ZIP 生成逻辑，但要求返回 Blob 而不是下载
-    return new Promise((resolve, reject) => {
-        const originalDownload = window.downloadFileFallback;
-        const originalShare = navigator.share;
-        let zipBlob = null;
-        // 临时拦截下载行为
-        window.downloadFileFallback = (blob, name) => { zipBlob = blob; resolve(blob); };
-        navigator.share = () => Promise.reject('intercept');
-        ChatBackup.exportBackupToFile({
-            inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
-            inclThemes: true, inclDg: true, inclStickers: true
-        }).catch(e => reject(e)).finally(() => {
-            window.downloadFileFallback = originalDownload;
-            navigator.share = originalShare;
-            if (!zipBlob) reject(new Error('未能拿到 ZIP Blob'));
-        });
+    // 1. 获取原始备份数据（不含图片分离）
+    let payload = await ChatBackup.buildBackupPayload({
+        inclMsgs: true, inclSet: true, inclCustom: true, inclAnn: true,
+        inclThemes: true, inclDg: true, inclStickers: true
     });
-}
 
+    // 2. 如果没有 JSZip 则报错（不再回退到下载方式）
+    if (typeof JSZip === 'undefined') {
+        throw new Error('JSZip 未加载，无法生成 ZIP');
+    }
+
+    const zip = new JSZip();
+    const store = payload.mediaStore || {};
+    const mediaIndex = {};
+
+    // 处理图片/媒体文件
+    for (let sid in store) {
+        if (!store.hasOwnProperty(sid)) continue;
+        let url = store[sid];
+        let parts = dataUrlToBinary(url);
+        let path = 'media/' + sid;
+        if (parts && parts.bytes && parts.bytes.length) {
+            zip.file(path, parts.bytes, { binary: true });
+            mediaIndex[sid] = { path: path, mime: parts.mime };
+        } else {
+            let txtPath = path + '.txt';
+            zip.file(txtPath, String(url));
+            mediaIndex[sid] = { path: txtPath, mime: 'text/plain+dataurl' };
+        }
+    }
+
+    const jsonBody = {
+        type: 'chatapp-backup-v5',
+        formatVersion: 5,
+        appName: payload.appName || 'ChatApp',
+        timestamp: payload.timestamp,
+        sessionId: payload.sessionId,
+        appPrefix: payload.appPrefix,
+        modules: payload.modules,
+        localforage: payload.localforage,
+        localStorage: payload.localStorage,
+        mediaIndex: mediaIndex
+    };
+    zip.file('backup.json', '\uFEFF' + JSON.stringify(jsonBody));
+    const zipBlob = await zip.generateAsync({
+        type: 'blob',
+        compression: 'DEFLATE',
+        compressionOptions: { level: 6 }
+    });
+    return zipBlob;
+}
 /**
  * 上传 ZIP 到 Storage，并更新数据库记录
  */
@@ -1386,7 +1419,7 @@ async function uploadLocalSnapshotToCloud(reason, options = {}) {
             });
         } catch (zipErr) {
             console.error('[云备份] ZIP 生成失败，回退到未压缩版本', zipErr);
-            zipBlob = await generateZipBlobFromLocal(); // 降级方案
+            throw new Error('ZIP 打包失败，无法上传云端');  // 不要回退下载
         }
     } else {
         // 没有 JSZip 时降级
