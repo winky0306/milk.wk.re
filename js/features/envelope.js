@@ -128,27 +128,50 @@ window.openEnvelopeAndViewReply = function(replyId) {
 };
 
 function generateEnvelopeReplyText() {
-    // 如果字卡库为空，直接返回一个友好提示，避免出现 undefined
+    // 如果字卡库为空，直接返回提示语
     if (!customReplies || customReplies.length === 0) {
         return "暂时不知道说什么好，你可以先去「高级功能 → 自定义回复」里添加一些字卡～";
     }
+
+    // ---- 安全获取被屏蔽的字卡（不依赖外部变量）----
+    let disabledItems = new Set();
+    let disabledGroupItems = new Set();
+
+    try {
+        // 1. 单独屏蔽的字卡（用户手动屏蔽的单条字卡）
+        const raw = localStorage.getItem('disabledReplyItems');
+        if (raw) disabledItems = new Set(JSON.parse(raw));
+    } catch (e) { console.warn('读取屏蔽字卡失败', e); }
+
+    try {
+        // 2. 整个分组被屏蔽的字卡（分组管理中的屏蔽开关）
+        const groups = window.customReplyGroups || [];
+        for (const g of groups) {
+            if (g.disabled && Array.isArray(g.items)) {
+                g.items.forEach(item => disabledGroupItems.add(item));
+            }
+        }
+    } catch (e) { console.warn('读取分组屏蔽失败', e); }
+
+    // 过滤可用字卡（未被屏蔽且未被分组屏蔽的）
     const sourcePool = customReplies.filter(r => !disabledItems.has(r) && !disabledGroupItems.has(r));
+    if (sourcePool.length === 0) {
+        return "字卡都被屏蔽了，请先取消屏蔽或添加新字卡～";
+    }
+
     const sentenceCount = Math.floor(Math.random() * (12 - 8 + 1)) + 8;
     let replyContent = "";
     for (let i = 0; i < sentenceCount; i++) {
         const randomSentence = sourcePool[Math.floor(Math.random() * sourcePool.length)];
-        // 多加一层保护：万一 randomSentence 是 undefined，就跳过
         if (!randomSentence) continue;
         const punctuation = Math.random() < 0.2 ? "！" : (Math.random() < 0.2 ? "..." : "。");
         replyContent += randomSentence + punctuation;
     }
-    // 如果最终内容还是空的（全部跳过），返回默认语句
     if (!replyContent.trim()) {
         return "回复出现错误～";
     }
     return replyContent;
 }
-
 
 window.switchEnvTab = function(tab) {
     currentEnvTab = tab;
@@ -441,19 +464,35 @@ function generateAutoEnvelopeContent() {
 
 // 主动投递一封信到收件箱（梦角主动寄信）
 function sendAutoEnvelope() {
+    // 确保 envelopeData 已加载
     if (!envelopeData) {
-        console.warn('envelopeData 未初始化');
-        return;
+        console.warn('envelopeData 未初始化，尝试重新加载');
+        // 这里不能直接 return，而是异步等待加载完成后再继续
+        return new Promise(async (resolve, reject) => {
+            await loadEnvelopeData();
+            if (!envelopeData) {
+                reject(new Error('信封数据加载失败'));
+                return;
+            }
+            try {
+                const result = await _doSendAutoEnvelope();
+                resolve(result);
+            } catch (e) {
+                reject(e);
+            }
+        });
     }
+    return _doSendAutoEnvelope();
+}
 
+// 实际执行发送的内部函数
+async function _doSendAutoEnvelope() {
     let content = generateAutoEnvelopeContent();
-    // 字库为空时，发送固定提示语
     if (!content) {
         content = '回复库为空，不知从何说起哦';
     }
 
     const newId = 'auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6);
-
     const inboxLetter = {
         id: newId,
         content: content,
@@ -474,8 +513,145 @@ function sendAutoEnvelope() {
         renderEnvelopeLists();
     }
 
+    // 添加一条聊天系统消息，让用户明确知道信已送达（增强体验）
+    if (typeof addMessage === 'function') {
+        addMessage({
+            id: Date.now(),
+            text: '💌 你催来了一封信，快打开「信封投递」看看吧',
+            timestamp: new Date(),
+            type: 'system'
+        });
+    }
+
     // 播放提示音
     if (typeof playSound === 'function') {
         playSound('message');
     }
+
+    return true;
 }
+// ========================= 催信功能 =========================
+let urgeTimer = null;          // 定时器ID
+let urgeRemaining = 0;        // 剩余秒数
+let urgeInterval = null;       // 倒计时的 interval 句柄
+
+// 停止倒计时并恢复按钮
+function stopUrgeCountdown() {
+    if (urgeInterval) {
+        clearInterval(urgeInterval);
+        urgeInterval = null;
+    }
+    const btn = document.getElementById('urge-letter-btn');
+    const countdownSpan = document.getElementById('urge-countdown');
+    if (btn) {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.textContent = '✉️ 催信';
+    }
+    if (countdownSpan) {
+        countdownSpan.style.display = 'none';
+        countdownSpan.textContent = '';
+    }
+    urgeTimer = null;
+    urgeRemaining = 0;
+}
+
+// 格式化倒计时显示 mm:ss
+function formatCountdown(sec) {
+    const mins = Math.floor(sec / 60);
+    const remainSec = sec % 60;
+    return `${mins.toString().padStart(2, '0')}:${remainSec.toString().padStart(2, '0')}`;
+}
+
+// 开始倒计时，默认60秒
+function startUrgeCountdown(seconds = 60) {
+    // 已有倒计时则不再重复开启
+    if (urgeInterval) {
+        showNotification('已有催信倒计时，请稍后再试', 'warning');
+        return;
+    }
+    if (seconds <= 0) return;
+    urgeRemaining = seconds;
+    const btn = document.getElementById('urge-letter-btn');
+    const countdownSpan = document.getElementById('urge-countdown');
+    if (!btn || !countdownSpan) return;
+
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    countdownSpan.style.display = 'inline-block';
+    countdownSpan.textContent = formatCountdown(urgeRemaining);
+
+    urgeInterval = setInterval(() => {
+        if (urgeRemaining <= 1) {
+            // ===== 关键修改：先显示 00:00，再执行发送 =====
+            clearInterval(urgeInterval);
+            urgeInterval = null;
+
+            // 强制显示 00:00，避免停留在 00:01
+            countdownSpan.textContent = formatCountdown(0);   // “00:00”
+
+            // 调用主动寄信函数（增加错误捕获）
+            (async () => {
+                try {
+                    // 确保信封数据已加载（如果没有就加载一次）
+                    if (typeof envelopeData === 'undefined' || !envelopeData) {
+                        await loadEnvelopeData();
+                    }
+                    if (typeof sendAutoEnvelope === 'function') {
+                        await sendAutoEnvelope();     // 等待发送完成（如果有异步操作）
+                        showNotification('✉️ 已为你催来一封信！', 'success');
+                    } else {
+                        console.error('sendAutoEnvelope 未定义');
+                        showNotification('催信失败：信封模块缺失', 'error');
+                    }
+                } catch (err) {
+                    console.error('催信过程中出错', err);
+                    showNotification('催信失败，请重试', 'error');
+                } finally {
+                    // 恢复按钮状态
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.style.opacity = '1';
+                        btn.textContent = '✉️ 催信';
+                    }
+                    countdownSpan.style.display = 'none';
+                    countdownSpan.textContent = '';
+                }
+            })();
+
+            // 重置主动寄信计时器（让梦角重新开始倒计时）
+            if (typeof manageAutoEnvelopeTimer === 'function') {
+                manageAutoEnvelopeTimer();
+            }
+        } else {
+            urgeRemaining--;
+            countdownSpan.textContent = formatCountdown(urgeRemaining);
+        }
+    }, 1000);
+}
+// 绑定催信按钮事件（只在信封模态框显示时绑定，避免重复）
+function bindUrgeButton() {
+    const urgeBtn = document.getElementById('urge-letter-btn');
+    if (urgeBtn && !urgeBtn._urgeBound) {
+        urgeBtn._urgeBound = true;
+        urgeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startUrgeCountdown(60);   // 1分钟倒计时
+        });
+    }
+}
+
+// 监听信封模态框的显示，每次打开都重新绑定（因为按钮可能在DOM中重建）
+document.addEventListener('DOMContentLoaded', function () {
+    const envelopeModal = document.getElementById('envelope-modal');
+    if (!envelopeModal) return;
+    // 使用 MutationObserver 监听模态框显示
+    const observer = new MutationObserver(() => {
+        if (envelopeModal.style.display === 'flex' || envelopeModal.style.display === 'block') {
+            bindUrgeButton();
+        }
+    });
+    observer.observe(envelopeModal, { attributes: true, attributeFilter: ['style'] });
+    // 初次绑定
+    bindUrgeButton();
+});
