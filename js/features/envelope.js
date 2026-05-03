@@ -50,7 +50,19 @@ async function checkEnvelopeStatus() {
     });
     if (changed) {
         saveEnvelopeData();
-        if (newReplyLetter) showEnvelopeReplyPopup(newReplyLetter);
+        if (newReplyLetter) {
+            showEnvelopeReplyPopup(newReplyLetter);
+            // 新增：在聊天中添加一条系统消息
+            if (typeof addMessage === 'function') {
+                const partnerName = (typeof settings !== 'undefined' && settings.partnerName) || '对方';
+                addMessage({
+                    id: Date.now(),
+                    text: `💌 收到了 ${partnerName} 的回信，快打开「信封投递」看看吧`,
+                    timestamp: new Date(),
+                    type: 'system'
+                });
+            }
+        }
     }
 }
 
@@ -463,11 +475,12 @@ function generateAutoEnvelopeContent() {
 }
 
 // 主动投递一封信到收件箱（梦角主动寄信）
-function sendAutoEnvelope() {
+// 主动投递一封信到收件箱（梦角主动寄信）
+// 参数 source: 'urge' 表示催信, 'auto' 表示主动定时寄信
+function sendAutoEnvelope(source = 'auto') {
     // 确保 envelopeData 已加载
     if (!envelopeData) {
         console.warn('envelopeData 未初始化，尝试重新加载');
-        // 这里不能直接 return，而是异步等待加载完成后再继续
         return new Promise(async (resolve, reject) => {
             await loadEnvelopeData();
             if (!envelopeData) {
@@ -475,18 +488,18 @@ function sendAutoEnvelope() {
                 return;
             }
             try {
-                const result = await _doSendAutoEnvelope();
+                const result = await _doSendAutoEnvelope(source);
                 resolve(result);
             } catch (e) {
                 reject(e);
             }
         });
     }
-    return _doSendAutoEnvelope();
+    return _doSendAutoEnvelope(source);
 }
-
 // 实际执行发送的内部函数
-async function _doSendAutoEnvelope() {
+// 实际执行发送的内部函数，source 参数: 'urge' 催信, 'auto' 主动定时寄信
+async function _doSendAutoEnvelope(source = 'auto') {
     let content = generateAutoEnvelopeContent();
     if (!content) {
         content = '回复库为空，不知从何说起哦';
@@ -513,11 +526,18 @@ async function _doSendAutoEnvelope() {
         renderEnvelopeLists();
     }
 
-    // 添加一条聊天系统消息，让用户明确知道信已送达（增强体验）
+    // 根据来源添加不同的聊天系统消息
     if (typeof addMessage === 'function') {
+        let msgText = '';
+        if (source === 'urge') {
+            msgText = '💌 你催来了一封信，快打开「信封投递」看看吧';
+        } else { // auto 主动寄信
+            const partnerName = (typeof settings !== 'undefined' && settings.partnerName) || '梦角';
+            msgText = `💌 ${partnerName} 主动给你寄来了一封信，快打开看看吧`;
+        }
         addMessage({
             id: Date.now(),
-            text: '💌 你催来了一封信，快打开「信封投递」看看吧',
+            text: msgText,
             timestamp: new Date(),
             type: 'system'
         });
@@ -598,7 +618,7 @@ function startUrgeCountdown(seconds = 60) {
                         await loadEnvelopeData();
                     }
                     if (typeof sendAutoEnvelope === 'function') {
-                        await sendAutoEnvelope();     // 等待发送完成（如果有异步操作）
+                        await sendAutoEnvelope('urge');  // 传递 'urge' 表示催信
                         showNotification('✉️ 已为你催来一封信！', 'success');
                     } else {
                         console.error('sendAutoEnvelope 未定义');
