@@ -652,15 +652,24 @@ function startUrgeCountdown(seconds = 60) {
 // 绑定催信按钮事件（只在信封模态框显示时绑定，避免重复）
 function bindUrgeButton() {
     const urgeBtn = document.getElementById('urge-letter-btn');
-    if (urgeBtn && !urgeBtn._urgeBound) {
-        urgeBtn._urgeBound = true;
-        urgeBtn.addEventListener('click', (e) => {
+    if (!urgeBtn) return;
+
+    // 用新按钮替换旧按钮，清除所有旧的事件监听
+    if (!urgeBtn.hasAttribute('data-replaced')) {
+        const newBtn = urgeBtn.cloneNode(true);
+        urgeBtn.parentNode.replaceChild(newBtn, urgeBtn);
+        newBtn.setAttribute('data-replaced', 'true');
+        newBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            startUrgeCountdown(60);   // 1分钟倒计时
+            // 如果已有倒计时，不能再催信
+            if (urgeInterval) {
+                showNotification('已有催信倒计时，请稍后再试', 'warning');
+                return;
+            }
+            showUrgeSettingsModal();
         });
     }
 }
-
 // 监听信封模态框的显示，每次打开都重新绑定（因为按钮可能在DOM中重建）
 document.addEventListener('DOMContentLoaded', function () {
     const envelopeModal = document.getElementById('envelope-modal');
@@ -675,3 +684,109 @@ document.addEventListener('DOMContentLoaded', function () {
     // 初次绑定
     bindUrgeButton();
 });
+
+// 全局变量：催信设置模态框
+let urgeSettingsModal = null;
+let selectedUrgeMinutes = 5; // 默认5分钟
+
+// 创建催信设置界面（滑条选择器）
+function createUrgeSettingsModal() {
+    if (urgeSettingsModal) return urgeSettingsModal;
+
+    const modal = document.createElement('div');
+    modal.id = 'urge-settings-modal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+    `;
+
+    const card = document.createElement('div');
+    card.style.cssText = `
+        background: var(--secondary-bg, #1e1e2e);
+        border-radius: 24px;
+        padding: 20px;
+        width: 280px;
+        text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        border: 1px solid var(--border-color, #333);
+    `;
+
+    card.innerHTML = `
+        <div style="font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--accent-color);">
+            ⏳ 设置催信时间
+        </div>
+        <div style="margin-bottom: 16px;">
+            <input type="range" id="urge-minute-slider" min="1" max="15" step="1" value="5" style="width: 100%;">
+            <div style="display: flex; justify-content: space-between; margin-top: 8px;">
+                <span style="font-size: 12px;">1分钟</span>
+                <span style="font-size: 14px; font-weight: bold; color: var(--accent-color);">
+                    <span id="urge-minute-value">5</span> 分钟
+                </span>
+                <span style="font-size: 12px;">15分钟</span>
+            </div>
+            <div style="font-size: 11px; color: var(--text-secondary); margin-top: 8px;">
+                等待 <span id="urge-minute-display">5</span> 分钟后，梦角就会寄出一封信
+            </div>
+        </div>
+        <div style="display: flex; gap: 12px;">
+            <button id="urge-settings-cancel" style="flex: 1; padding: 10px; border-radius: 12px; border: 1px solid var(--border-color); background: var(--primary-bg); color: var(--text-secondary); cursor: pointer;">取消</button>
+            <button id="urge-settings-confirm" style="flex: 1; padding: 10px; border-radius: 12px; border: none; background: var(--accent-color); color: white; font-weight: bold; cursor: pointer;">确定</button>
+        </div>
+    `;
+
+    modal.appendChild(card);
+    document.body.appendChild(modal);
+
+    // 绑定滑条事件
+    const slider = card.querySelector('#urge-minute-slider');
+    const minuteSpan = card.querySelector('#urge-minute-value');
+    const minuteDisplay = card.querySelector('#urge-minute-display');
+    slider.addEventListener('input', (e) => {
+        const val = e.target.value;
+        minuteSpan.textContent = val;
+        minuteDisplay.textContent = val;
+        selectedUrgeMinutes = parseInt(val);
+    });
+
+    // 取消按钮
+    card.querySelector('#urge-settings-cancel').addEventListener('click', () => {
+        modal.style.display = 'none';
+    });
+
+    // 确定按钮
+    card.querySelector('#urge-settings-confirm').addEventListener('click', () => {
+        modal.style.display = 'none';
+        const seconds = selectedUrgeMinutes * 60;
+        startUrgeCountdown(seconds);
+    });
+
+    // 点击背景关闭
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.style.display = 'none';
+    });
+
+    urgeSettingsModal = modal;
+    return modal;
+}
+
+// 显示催信设置界面
+function showUrgeSettingsModal() {
+    const modal = createUrgeSettingsModal();
+    // 重置滑条到上次选择的值
+    const slider = modal.querySelector('#urge-minute-slider');
+    if (slider) {
+        slider.value = selectedUrgeMinutes;
+        // 触发input事件更新显示
+        const event = new Event('input');
+        slider.dispatchEvent(event);
+    }
+    modal.style.display = 'flex';
+}
